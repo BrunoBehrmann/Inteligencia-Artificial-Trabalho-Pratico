@@ -5,7 +5,7 @@
 **Departamento de Ciência da Computação (DCC)**  
 **Semestre:** 2025.2  
 **Docente:** Luciano Oliveira  
-**Discente:** *Bruno de Sousa Behrmann / Reginaldo Silva*  
+**Discente:** *Bruno de Sousa Behrmann / Reginaldo Silva de Oliveira*  
 
 ## Objetivo
 
@@ -46,3 +46,52 @@ O robô deve navegar pelo ambiente, localizar 15 cubos coloridos (verde, azul ou
 Os módulos de controle do YouBot em Python encontram-se em: IA_20252/controllers/youbot
 A alternativa em C está localizada em: IA_20252/libraries/youbot_control/src.
 Todo o ambiente simulado está incluído no pacote *IA_20252* fornecido com o projeto.
+
+## Estrutura de pastas e arquivos
+
+
+- **worlds/** 
+
+ Contém o arquivo de mundo do Webots, que é usado para simular o ambiente do robô. O arquivo meu_mundo.wbt é o mundo que você criou no Webots.
+
+ - **controllers/**
+
+ Contém o meu_controller.py, código do controlador do robô. O controlador é responsável por ler os dados dos sensores, processar as informações e enviar comandos para os atuadores do robô.
+
+- **models/**
+
+Contém os modelos de rede neural e lógica fuzzy que você usará no projeto.
+    - cnn_model.h5: Modelo de rede neural CNN pré-treinado para detecção de objetos.
+    - fuzzy_logic.py: Implementação da lógica fuzzy para a garra do robô, responsável por controlar a força de agarrar e soltar objetos.
+
+- **utils/**
+
+Contém funções utilitárias para processamento de imagens e dados do Lidar.
+    - image_processing.py: Funções para processar as imagens da câmera, incluindo conversão de formatos, filtragem e detecção de bordas.
+    - lidar_processing.py: Funções para processar os dados do Lidar, incluindo filtragem e detecção de obstáculos.
+
+- **data/**
+
+Contém os dados de treinamento e teste para a rede neural.
+    - images/: Imagens de treinamento e teste para a rede neural.
+    - labels/: Etiquetas correspondentes às imagens, indicando a posição e a classe dos objetos.
+
+- **results/**
+
+Contém os resultados do processamento e logs do projeto.
+    - imagens_processadas/: Imagens processadas pela rede neural, incluindo as detecções de objetos.
+    - logs/: Logs do projeto, incluindo informações de erro e debug.
+
+- **worlds/**
+
+Contém o arquivo de mundo do Webots, que é usado para simular o ambiente do robô.
+    - meu_mundo.wbt: O mundo que você criou no Webots, incluindo o robô, os objetos e o ambiente.
+
+- **requirements.txt**
+
+Lista de dependências do projeto, incluindo as bibliotecas e pacotes necessários para executar o código.
+
+
+- **README.md**
+
+Arquivo de descrição do projeto, incluindo informações sobre como executar o projeto e como usar o mundo do Webots.
