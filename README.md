@@ -56,7 +56,7 @@ Todo o ambiente simulado está incluído no pacote *IA_20252* fornecido com o pr
 
  - **controllers/**
 
- Contém o meu_controller.py, código do controlador do robô. O controlador é responsável por ler os dados dos sensores, processar as informações e enviar comandos para os atuadores do robô.
+ Contém o youbot.py, código do controlador do robô. O controlador é responsável por ler os dados dos sensores, processar as informações e enviar comandos para os atuadores do robô.
 
 - **models/**
 
