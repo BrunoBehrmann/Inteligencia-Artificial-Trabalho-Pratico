@@ -1,22 +1,39 @@
+<<<<<<< HEAD
 """
 Controlador YouBot para Coleta de Dataset
 """
 from controller import Robot, Keyboard
+=======
+from controller import Robot, Lidar, Camera
+>>>>>>> 40861c3e274514c737c8578e19834160fa38516f
 from base import Base
 from arm import Arm
 from gripper import Gripper
 import cv2
 import numpy as np
+<<<<<<< HEAD
 import os
 from datetime import datetime
 
 class YouBotController:
     def __init__(self):
         # Inicialização do Robô
+=======
+
+
+class YouBotController:
+    def __init__(self):
+        # Acessa o robô
+>>>>>>> 40861c3e274514c737c8578e19834160fa38516f
         self.robot = Robot()
+
         self.time_step = int(self.robot.getBasicTimeStep())
+<<<<<<< HEAD
         
         # Inicializa as partes do corpo
+=======
+
+>>>>>>> 40861c3e274514c737c8578e19834160fa38516f
         self.base = Base(self.robot)
         self.arm = Arm(self.robot)
         self.gripper = Gripper(self.robot)
@@ -28,6 +45,7 @@ class YouBotController:
         # Inicializa Lidar
         self.lidar = self.robot.getDevice("lidar")
         self.lidar.enable(self.time_step)
+<<<<<<< HEAD
         self.lidar.enablePointCloud()
 
         # Inicializa Teclado
@@ -59,6 +77,34 @@ class YouBotController:
             # Salva
             cv2.imwrite(filename, img)
             print(f"Imagem salva: {filename}")
+=======
+
+        while self.robot.step(32) != -1:
+            # Lê os dados do Lidar
+            lidar_data = self.lidar.getRangeImage()
+
+            # Lê as imagens da câmera
+            img = self.camera.getImage()
+
+            # Converte a imagem para OpenCV
+            img_cv = np.array(img).reshape(
+                (self.camera.getHeight(), self.camera.getWidth(), 4))
+            img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGRA2BGR)
+
+            # Função personalizada a ser implementada qu processa as imagens para detectar o objeto
+            # Exemplo: Usando um modelo pré-treinado para detecção
+            # objeto = detectar_objeto(img_cv)
+
+            # Função personalizada a ser implementada que calcula a posição do objeto
+            # com base nos dados do Lidar
+            # posicao = calcular_posicao(lidar_data, objeto)
+
+            # Função personalizada a ser implementada que controla o movimento do robô
+            # controlar_robo(robot, posicao)
+
+            # Atualiza o robô
+            self.robot.step(32)
+>>>>>>> 40861c3e274514c737c8578e19834160fa38516f
 
     def run(self):
         print("=== CONTROLE MANUAL INICIADO ===")
@@ -103,6 +149,14 @@ class YouBotController:
                 # Pequeno delay lógico para não tirar 50 fotos se segurar o P
                 # (O ideal é apertar e soltar rápido)
 
+
 if __name__ == "__main__":
     controller = YouBotController()
+<<<<<<< HEAD
     controller.run()
+=======
+    # controller.run()
+
+
+robot = Robot()
+>>>>>>> 40861c3e274514c737c8578e19834160fa38516f
