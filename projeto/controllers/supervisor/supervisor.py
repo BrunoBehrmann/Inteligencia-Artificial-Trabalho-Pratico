@@ -27,7 +27,7 @@ else:
 
 
 def get_existing_obstacles():
-    """Extrai posições de WoodenBoxes e PlasticFruitBoxes presentes no mundo."""
+    """Extract positions of WoodenBoxes and PlasticFruitBoxes from the world."""
     obstacles = []
     n = root_children.getCount()
     for i in range(n):
@@ -51,13 +51,13 @@ def get_existing_obstacles():
                     'y': pos[1],
                     'radius': radius + 0.1
                 })
-                # print(f"Obstáculo encontrado em ({pos[0]:.2f}, {pos[1]:.2f}) com raio {radius:.2f}")
+                # print(f"Found obstacle at ({pos[0]:.2f}, {pos[1]:.2f}) with radius {radius:.2f}")
 
     return obstacles
 
 
 def delete_existing_objects():
-    """Remove objetos previamente gerados (spawns)."""
+    """Remove previously spawned objects."""
     n = root_children.getCount()
     for i in reversed(range(n)):
         node = root_children.getMFNode(i)
@@ -78,15 +78,15 @@ existing_obstacles = get_existing_obstacles()
 
 positions = []
 colors = [
-    (0, 1, 0),  # verde
-    (1, 0, 0),  # vermelho
-    (0, 0, 1),  # azul
+    (0, 1, 0),  # green
+    (1, 0, 0),  # red
+    (0, 0, 1),  # blue
 ]
 shapes = ["cube"]
 
 
 def random_pos():
-    """Gera uma posição aleatória no piso dentro da área configurada."""
+    """Generate random position on the floor."""
     return (
         random.uniform(x_min, x_max),
         random.uniform(y_min, y_max),
@@ -95,7 +95,7 @@ def random_pos():
 
 
 def is_far_enough(pos):
-    """Verifica se uma posição está suficientemente distante de outros objetos gerados e obstáculos existentes."""
+    """Check if position is far from both spawned objects and existing obstacles."""
     for q in positions:
         dx, dy = pos[0] - q[0], pos[1] - q[1]
         if math.hypot(dx, dy) < min_dist:
@@ -107,6 +107,12 @@ def is_far_enough(pos):
             return False
 
     return True
+
+
+# reposiciona o robô na origem
+
+robot_node = None
+n = root_children.getCount()
 
 
 spawned_count = 0
@@ -126,7 +132,7 @@ for i in range(n_objects):
 
     if not success:
         print(
-            f"Aviso: Não foi possível encontrar posição válida para o objeto {i} após {max_attempts} tentativas")
+            f"Warning: Could not find valid position for object {i} after {max_attempts} attempts")
         failed_spawns += 1
         continue
 
@@ -166,12 +172,12 @@ for i in range(n_objects):
 
 print(
     f"Spawn complete. The supervisor has spawned {spawned_count}/{n_objects} objects ({failed_spawns} failed).")
-# print("Inicializando física...")
+# print("Initializing physics...")
 
 for _ in range(20):
     supervisor.step(timestep)
 
-# print("Supervisor pronto.")
+# print("Supervisor ready.")
 
 # while supervisor.step(timestep) != -1:
     # pass

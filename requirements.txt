@@ -1,0 +1,4 @@
+# Sempre que você levar seu projeto para um novo computador você pode usará o comando
+# abaixo para instalar as dependências abaixo listadas:
+# pip install -r requirements.txt
+numpy

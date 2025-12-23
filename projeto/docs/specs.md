@@ -1,249 +1,159 @@
-# PRD — Projeto YouBot: Coleta e Organização de Cubos (MVP)
+# Especificação da Técnica de Navegação Autônoma e Coleta de Cubos
 
-## Visão
+## 1. Objetivo do Projeto
 
-Entregar um protótipo funcional em Webots onde um YouBot coleta 15 cubos coloridos (verde, azul, vermelho), identifica a cor e deposita cada cubo na caixa correspondente, navegando com segurança pelo ambiente.
+O objetivo deste projeto é desenvolver, no simulador **Webots**, um sistema de controle inteligente para um robô móvel terrestre do tipo **YouBot**, capaz de realizar **coleta, transporte e organização autônoma de cubos coloridos** em uma arena delimitada.
 
-## Resumo da alteração
+Os cubos estão distribuídos aleatoriamente no ambiente e possuem cores distintas (**verde, azul e vermelho**). Para cada cubo encontrado, o robô deverá:
 
-- Substituição da MLP por um detector YOLO para detecção/classificação de cubos.
-- Para o LIDAR, adotaremos explicitamente um polar grid agregado por setores (Esquerda / Frente / Direita) como entrada para regras fuzzy.
- - Roadmap reequilibrado para 16 dias, com distribuição das tarefas por complexidade.
+- Detectar visualmente o cubo;
+- Identificar sua cor;
+- Navegar de forma autônoma e segura até o cubo;
+- Coletá-lo utilizando uma garra robótica;
+- Transportá-lo até a caixa correspondente à sua cor;
+- Depositar o cubo corretamente.
 
-## Objetivo principal
-
-Implementar uma solução simples, robusta e reproduzível que cumpra os requisitos do trabalho, priorizando abordagens que acelerem a entrega (uso de modelos pré‑treinados e geração sintética de dados quando possível).
-
-## Critérios de sucesso (aceitação)
-
-- Robô coleta 15 cubos distribuídos aleatoriamente e os deposita nas caixas corretas.
-- Navegação evitando obstáculos usando LIDAR (polar grid por setores) com controle fuzzy.
-- Detector YOLO classifica cores com precisão prática (meta ≥ 90% em simulação razoável).
-- Entrega: vídeo (≤ 15 min) demonstrando execução e repositório com código, modelos e instruções reproduzíveis.
-
-## Escopo do MVP (prioridade alta)
-
-- Simulação em Webots usando o código-base fornecido: `IA_20252/controllers/youbot`.
-- **Percepção**:
-  - Detector YOLO para localizar e classificar cubos (classes: `green`, `blue`, `red`).
-  - Segmentação HSV como fallback/protótipo rápido para depuração e geração de anotações sintéticas.
-- **Planejamento e controle**:
-  - LIDAR processado como polar grid agregado por setores (Esquerda / Frente / Direita) — entradas para a lógica fuzzy.
-  - Regras fuzzy simples que combinam distâncias por setor + ângulo para alvo + estado de carga (tem cubo / não tem) para produzir velocidades e ações.
-- **Manipulação**:
-  - Uso do controlador de gripper já disponível para abrir/fechar.
-
-## Estados do Robô
-
-Abaixo segue a máquina de estados simplificada que o YouBot seguirá durante a simulação, com as entradas (sensores/variáveis) e saídas (comandos/ações) de cada estado.
-
-Estados (alto nível):
-
-- Idle
-  - Descrição: estado inicial/espera antes de iniciar missão.
-  - Entradas: comando de start; diagnóstico de sensores (LIDAR/câmera/pronto).
-  - Saídas: inicialização de subsistemas; transição para Explore quando `start`.
-
-- Explore / Patrol
-  - Descrição: varredura da arena para localizar cubos; comportamento reativo para cobertura.
-  - Entradas: leituras LIDAR (setores), detecções parciais da câmera/YOLO, posição atual, mapa local.
-  - Saídas: comandos de velocidade (linear, angular), atualização do mapa local, lista de candidatos (bounding boxes) detectados; transição para Approach quando detecta alvo plausível.
-
-- Approach (Ir ao alvo)
-  - Descrição: aproximação do cubo selecionado mantendo prevenção de colisões.
-  - Entradas: bounding box do alvo (centro, confiança), LIDAR (setores), pose atual, target_angle.
-  - Saídas: comandos de navegação fino (velocidade reduzida, correções angulares); transição para Align quando alcance distância de picking.
-
-- Align (Alinhar para pegar)
-  - Descrição: alinhamento preciso do gerador de manipulação (braço/gripper) com o cubo.
-  - Entradas: visão de próximo alcance (crop), LIDAR frontal, distância ao alvo, estado do braço.
-  - Saídas: comandos do braço (trajectória/posição), comandos finos de base (micro‑ajustes); transição para Pick quando pronto.
-
-- Pick (Pegar)
-  - Descrição: acionar sequência de preensão e confirmar sucesso.
-  - Entradas: posição do gripper, sensores do gripper (se houver), feedback de posição do braço.
-  - Saídas: comando `close_gripper`, confirmação `carrying = True`; transição para Transport se pegar com sucesso, caso contrário Retry/Recovery.
-
-- Transport (Transportar para caixa)
-  - Descrição: navegar até a caixa correspondente à cor do cubo carregado.
-  - Entradas: posição alvo (caixa correspondente), LIDAR, mapa local, estado `carrying`.
-  - Saídas: comandos de navegação (trajeto), ajuste fuzzy para evitar obstáculos; transição para AlignDeposit quando próximo da caixa.
-
-- AlignDeposit (Alinhar para depositar)
-  - Descrição: posicionamento preciso sobre a área de depósito.
-  - Entradas: visão/câmera da área de depósito, LIDAR frontal, posição do braço.
-  - Saídas: comandos do braço para posicionamento, abertura do gripper programada; transição para Place.
-
-- Place (Depositar)
-  - Descrição: soltar o cubo e confirmar sucesso.
-  - Entradas: sensores do gripper, posição do braço, confirmação por visão (se aplicada).
-  - Saídas: comando `open_gripper`, `carrying = False`, log do evento (posição, cor, timestamp); transição para Explore (continuar missão) ou Idle se completou 15 cubos.
-
-- Avoidance (Evitar Obstáculos) — estado reativo
-  - Descrição: acionado a qualquer momento por leituras críticas do LIDAR (Near em setor frontal) para evitar colisões imediatas.
-  - Entradas: LIDAR (setores) com `Near` em Frente/Esquerda/Direita.
-  - Saídas: manobra de emergência (parar, virar), atualização de mapa/local path replan; retorna ao estado anterior após resolução.
-
-- Recovery / Error
-  - Descrição: tratar falhas (falha de gripper, perda de alvo, stuck) com tentativas de recuperação ou fallback.
-  - Entradas: timeouts, falhas de ação (pick fail), sensores inconsistenes.
-  - Saídas: tentativas de retry (relocalizar/realinhar), log de erro, transição para Idle ou instrução de intervenção humana se não recuperável.
-
-Notas de integração:
-
-- Cada estado deve expor um pequeno contrato de entradas/saídas (ex.: função `step(inputs) -> (outputs, next_state)`) para facilitar testes e simulação.
-- O estado `Avoidance` é prioritário (interrupt) e pode preemptar o fluxo principal até resolução.
-- Todos os estados registram eventos no log (state_enter, state_exit, principais decisões) para facilitar avaliação e vídeo de apresentação.
-
-## Requisitos funcionais (essenciais)
-1. RF1: Navegar e evitar obstáculos com o LIDAR (polar grid agregado por setores).
-2. RF2: Detectar e localizar cubos na cena (bounding box + classe) usando YOLO.
-3. RF3: Classificar cor do cubo (verde/azul/vermelho) pelo detector YOLO.
-4. RF4: Pegar cubo com a garra e depositar na caixa da cor correta.
-5. RF5: Registrar eventos (posição do cubo, cor, confiança, timestamp) em log simples.
-
-## Requisitos não‑funcionais
-- Deve rodar em máquina de desenvolvimento comum usando Webots; para treino/fine‑tuning, GPU é recomendada mas não obrigatória (usar Tiny variants para CPU quando necessário).
-- Código em Python; dependências mínimas sugeridas: `numpy`, `opencv-python`, `torch` + `ultralytics` (ou `yolov5`), `scikit-fuzzy` opcional. Ferramentas de anotação sugeridas: `labelme` / `roboflow` ou scripts de geração sintética.
-
-## Solução técnica detalhada
-### LIDAR — Polar grid por setores
-
-- **Pré‑processamento LIDAR**: converter scan (ângulos/distâncias) em 3 setores agregados — **Esquerda**, **Frente**, **Direita**.
-  - Exemplo de partição (3 setores):
-    - Esquerda: +60° a +180°
-    - Frente: −60° a +60°
-    - Direita: −180° a −60°
-  - Para cada setor calcular: `min_distance`, `mean_distance`, `angle_of_min`.
-  - Normalizar/cap os valores (ex.: 0.2–3.0 m) e mapear para conjuntos fuzzy (Near / Medium / Far).
-
-**Por que setores?**
-
-- Gera variáveis claras e interpretáveis para regras fuzzy (ex.: "se Frente é Near então Pare/Gire").
-- Requer menos pré‑processamento que abordagens baseadas em clustering de vetores de obstáculos.
-
-### Variáveis fuzzy (exemplo)
-
-- **Inputs**: `front_dist` (Near/Med/Far), `left_dist`, `right_dist`, `target_angle` (Left/Center/Right), `carrying` (Yes/No).
-- **Outputs**: `linear_speed` (Stop/Slow/Fast), `angular_speed` (TurnLeft/TurnRight/Straight), `action` (Move/Pick/Place).
-
-### Regras exemplo (alto‑nível)
-
-- Se `front_dist` é Near e `left_dist` é Far → `angular_speed` = TurnLeft, `linear_speed` = Slow.
-- Se `front_dist` é Near e `right_dist` é Far → `angular_speed` = TurnRight, `linear_speed` = Slow.
-- Se `front_dist` é Far e `target_angle` é Center → `linear_speed` = Fast, `angular_speed` = Straight.
-- Se `carrying` é Yes e `target_angle` é Center e `front_dist` é Far → `action` = Place.
-- Se `carrying` é No e `target_angle` é Center e `front_dist` é Near → `action` = Pick.
-
-### YOLO — Dados e treino
-
-- Gerar/anotar dataset com bounding boxes para os cubos (pode usar geração sintética via Webots para acelerar). Aplicar aumentos de iluminação/ruído para robustez.
-- Converter anotações para o formato YOLO e fine‑tunar um modelo pré‑treinado (usar Tiny‑YOLO se sem GPU). Salvar o modelo em `projeto/models/`.
-
-## Métricas
-
-- Métrica principal: número de cubos corretamente depositados (meta: 15/15 na simulação).
-- Métricas secundárias: precisão por classe / mAP (meta ≥ 90%), colisões por execução (0 desejável), tempo por execução.
-
-## Roadmap detalhado (16 dias distribuídos)
-
-Total: **16 dias úteis** (sugeridos) distribuídos conforme complexidade e dependências:
-
-1. **Setup e integração inicial** — 2 dias
-   - Preparar ambiente Webots, integrar leitura LIDAR e câmera no controlador do YouBot; validar streams de sensor.
-
-2. **Protótipo rápido: segmentação HSV + pipeline de debug** — 2 dias
-   - Implementar segmentação HSV para depuração e geração rápida de anotações sintéticas; criar scripts para captura de frames do simulador.
-
-3. **Geração / anotação do dataset** — 3 dias
-   - Gerar imagens sintéticas com variação de iluminação e posições de cubos; exportar bounding boxes.
-   - Refinar anotações e converter para formato YOLO.
-
-4. **Fine‑tuning do YOLO** — 3 dias
-   - Fine‑tunar modelo pré‑treinado (preferir Tiny se sem GPU); validar em conjunto com imagens de validação.
-
-5. **Integração YOLO + runtime de inferência** — 2 dias
-   - Integrar inferência YOLO ao controlador do YouBot (pipeline: captura → detect → selecionar alvo → navegação).
-
-6. **LIDAR polar grid + controlador fuzzy** — 2 dias
-   - Implementar agregação por setores do LIDAR, construção das variáveis fuzzy, conjunto inicial de regras e integração com o sistema de ação.
-
-7. **Testes finais, ajustes e gravação do vídeo** — 1 dia
-   - Testes de cenário completo, ajustes de parâmetros, gravação do vídeo de apresentação (≤ 15 min) e organização do repositório.
-
-8. **Fazer Slides** — 1 dia
-   - Preparar slides conforme as "Sugestões para Slides": abertura, objetivo, arquitetura, máquina de estados, percepção, LIDAR, resultados e conclusão.
-
-**Observação:** a distribuição assume equipe pequena (1–2 pessoas). Ajuste dias se houver GPU disponível (acelera passo 4) ou mais mão de obra para anotação.
-
-## Riscos e mitigação
-
-- Risco: anotação e fine‑tuning consomem tempo — mitigar com geração sintética e uso de modelos pré‑treinados.
-- Risco: inferência lenta em CPU — mitigar escolhendo Tiny variants e reduzindo resolução de entrada.
-
-## Entregáveis (MVP)
-
-- Código que roda em Webots integrando YOLO + LIDAR polar grid + controlador fuzzy.
-- Modelo YOLO fine‑tuned em `projeto/models/`.
-- Scripts de geração/anotação de dataset e treino.
-- Vídeo de apresentação e `README` com instruções de execução.
-
-## Checklist mínimo para entrega
-
-- [ ] Código que roda em Webots com demonstração automática.
-- [ ] Modelo YOLO fine‑tuned salvo em `projeto/models/`.
-- [ ] Scripts de geração/anotação de dataset e treino.
-- [ ] Vídeo de apresentação e `README` com instruções para reproduzir.
+Durante toda a execução da tarefa, o robô deve evitar colisões com paredes, caixas e demais obstáculos presentes no ambiente.
 
 ---
 
-## Sugestões para Slides
+## 2. Abordagem Geral da Solução
 
-Observação: evitar mostrar trechos de código ou textos longos nos slides — prefira imagens, gráficos, ícones e clipes de vídeo.
+A solução proposta integra técnicas de **Inteligência Artificial**, **Robótica Móvel** e **Controle Inteligente**, combinando percepção visual, navegação reativa e tomada de decisão contínua.
 
-### Ordem e conteúdo visual sugeridos
+As técnicas utilizadas são:
 
-1. **Slide de Abertura**
-   - Logo da universidade/turma e título do projeto como arte gráfica; imagem do YouBot como plano de fundo.
+- **Rede Neural Convolucional (YOLO)** para detecção e classificação dos cubos;
+- **Vector Field Histogram (VFH)** para navegação local e desvio de obstáculos;
+- **Lógica Fuzzy** para definição das ações do robô;
+- **Máquina de Estados Finitos (FSM)** para coordenação da tarefa de coleta.
 
-2. **Objetivo (visual)**
-   - Ícones grandes: coletar, identificar cor, depositar (três ícones em linha).
+Essa abordagem permite navegação orientada a objetivos **sem uso de GPS ou mapas globais**.
 
-3. **Arquitetura do Sistema**
-   - Diagrama visual com blocos e setas (Câmera → YOLO; LIDAR → Polar Grid → Fuzzy; Controlador → Braço/Gripper).
+---
 
-4. **Máquina de Estados**
-   - Diagrama de estados (bolhas/caixas + setas) mostrando transições; cores e ícones por estado.
+## 3. Arquitetura Geral do Sistema
 
-5. **Percepção — YOLO**
-   - Sequência de screenshots com bounding boxes; mosaico: original + overlay do detector + mapa de confiança.
+A arquitetura do sistema é modular e baseada em fluxo contínuo de dados sensoriais e decisões de controle.
 
-6. **LIDAR — Polar Grid**
-   - Visualização do scan agregado por setores (gráfico circular/rose ou barras por setor).
+### 3.1 Fluxo de Dados da Arquitetura
 
-7. **Comportamento / Fuzzy**
-   - Infográfico das entradas (setores LIDAR, ângulo, carrying) e saídas (velocidade/ação) com ícones.
+- A câmera fornece imagens RGB para a rede neural YOLO;
+- O YOLO detecta o cubo, identifica sua cor e estima a direção do alvo;
+- O sensor Lidar fornece dados de distância ao módulo VFH;
+- O VFH analisa o risco de colisão ao redor do robô;
+- A Lógica Fuzzy combina a direção do alvo e o risco de obstáculos;
+- O sistema de controle gera comandos de velocidade linear e angular;
+- O robô executa o movimento e atualiza o ciclo de percepção.
 
-8. **Dataset & Treino**
-   - Amostras do dataset sintético (imagens com bounding boxes) e gráfico de métrica de validação.
+---
 
-9. **Resultados / Métricas**
-   - Gráficos (barras/linhas) com taxa de acerto por cor, número de cubos depositados corretamente.
+## 4. Percepção Visual com Rede Neural (YOLO)
 
-10. **Demo (vídeo curto)**
-   - Clipe de execução da simulação (20–60s) e storyboard com 3‑4 imagens.
+### 4.1 Função da Rede Neural
 
-11. **Roadmap / Cronograma**
-   - Linha do tempo gráfica (16 dias) com blocos coloridos por sprint.
+A Rede Neural Convolucional **YOLO (You Only Look Once)** é responsável pela percepção visual do ambiente, realizando:
 
-12. **Conclusão / Próximos Passos**
-   - Ícones representando melhorias possíveis (ex.: SLAM, deploy real).
+- Detecção dos cubos no campo de visão da câmera;
+- Classificação da cor do cubo (verde, azul ou vermelho);
+- Estimativa da posição angular do cubo em relação ao eixo frontal do robô.
 
-13. **Créditos / Contato**
-   - Fotos dos integrantes + ícones de contato (YouTube/Email).
+### 4.2 Dados de Entrada
 
-### Dicas de design
-- Preferir imagens grandes, ícones e legendas curtas; use a fala para explicar detalhes.
-- Usar cores consistentes para classes (verde/azul/vermelho) nas figuras e bounding boxes.
-- Inserir legendas visuais no vídeo (subtítulos) em vez de texto extenso nos slides.
-- Tempo sugerido: 10–12 slides, 12–15 minutos de apresentação, 1–2 minutos de vídeo demonstrativo.
+- Imagens RGB capturadas pela câmera frontal do robô.
+
+### 4.3 Dados de Saída
+
+- Classe do objeto detectado (cor do cubo);
+- Bounding box do cubo na imagem;
+- Ângulo relativo do cubo em relação ao centro da imagem (`θ_alvo`).
+
+Essas informações são utilizadas para orientar a navegação do robô até o cubo ou até a caixa correspondente.
+
+---
+
+## 5. Navegação Local e Evitação de Obstáculos com VFH
+
+### 5.1 Função do VFH
+
+O **Vector Field Histogram (VFH)** é uma técnica de navegação reativa que utiliza dados do sensor Lidar para representar a ocupação do ambiente em um histograma polar, permitindo a identificação de direções seguras de movimento.
+
+### 5.2 Dados de Entrada
+
+- Leituras do sensor Lidar, representadas como distâncias radiais em múltiplos ângulos.
+
+### 5.3 Processamento
+
+- Conversão das leituras do Lidar em um histograma polar;
+- Cálculo do grau de risco associado a cada setor angular;
+- Identificação de regiões navegáveis e regiões proibidas.
+
+### 5.4 Dados de Saída
+
+- Grau de risco frontal;
+- Grau de risco lateral (esquerda e direita);
+- Conjunto de direções seguras para navegação.
+
+---
+
+## 6. Controle das Ações por Lógica Fuzzy
+
+### 6.1 Função da Lógica Fuzzy
+
+A **Lógica Fuzzy** atua como sistema de controle de baixo nível, responsável por transformar informações sensoriais incertas em comandos contínuos de movimento.
+
+Ela realiza a fusão entre:
+
+- A direção do alvo fornecida pela YOLO;
+- O grau de risco de colisão fornecido pelo VFH.
+
+### 6.2 Entradas Fuzzy
+
+- Distância ao obstáculo frontal;
+- Diferença angular entre o robô e o alvo (`θ_alvo`);
+- Grau de risco lateral.
+
+### 6.3 Saídas Fuzzy
+
+- Velocidade linear (`v`);
+- Velocidade angular (`ω`).
+
+Essas saídas são aplicadas diretamente aos motores do robô.
+
+---
+
+## 7. Máquina de Estados Finitos para Coleta de Cubos
+
+A execução da tarefa de coleta e organização dos cubos é coordenada por uma **Máquina de Estados Finitos (FSM)** de alto nível.
+
+### 7.1 Estados do Sistema
+
+- **Busca de Cubo**  
+  O robô realiza movimentos de varredura até detectar um cubo por meio da YOLO.
+
+- **Aproximação do Cubo**  
+  O robô navega em direção ao cubo utilizando YOLO, VFH e Lógica Fuzzy.
+
+- **Alinhamento Fino**  
+  Ajuste preciso de posição e orientação para permitir a coleta segura.
+
+- **Coleta do Cubo**  
+  A garra robótica é acionada para capturar o cubo.
+
+- **Identificação da Caixa**  
+  A cor do cubo determina a caixa de destino.
+
+- **Navegação até a Caixa**  
+  O robô navega até a caixa correspondente, evitando obstáculos.
+
+- **Depósito do Cubo**  
+  O cubo é liberado dentro da caixa.
+
+- **Retorno à Busca**  
+  O robô retorna ao estado inicial até que todos os cubos sejam coletados.
+
+---
+
+## 8. Considerações Finais
+
+A integração entre **YOLO**, **VFH** e **Lógica Fuzzy** permite que o robô execute a tarefa de coleta de cubos de forma autônoma, segura e eficiente, mesmo em ambientes não estruturados. A solução atende integralmente aos requisitos do projeto, explorando conceitos fundamentais de visão computacional, navegação reativa, controle inteligente e robótica móvel.
