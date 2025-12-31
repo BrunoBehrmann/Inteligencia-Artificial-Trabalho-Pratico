@@ -46,6 +46,10 @@ O robô deve navegar pelo ambiente, localizar 15 cubos coloridos (verde, azul ou
 Os módulos de controle do YouBot em Python encontram-se em: IA_20252/controllers/youbot
 A alternativa em C está localizada em: IA_20252/libraries/youbot_control/src.
 Todo o ambiente simulado está incluído no pacote *IA_20252* fornecido com o projeto.
+Sempre que você levar seu projeto para um novo computador, para garantir a portabilidade deste trabalho, faça da seguinte forma:
+
+Abra o terminal de sua preferência, navegue até a pasta raiz do projeto (IA_20252), certifique-se de ela contém o arquivo "requirements.txt" e execute o seguinte comando no terminal de sua preferência (PowerShell ou Prompt de Comando no Windows):
+pip install -r requirements.txt
 
 ## Estrutura de pastas e arquivos
 

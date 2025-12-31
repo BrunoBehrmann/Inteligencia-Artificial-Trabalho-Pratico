@@ -1,66 +1,84 @@
+import sys
 from controller import Robot
 from base import Base
 from arm import Arm
 from gripper import Gripper
-from lidar_processing import compute_vfh_direction
-import sys
-import os
 
-# Garante imports locais
-sys.path.append(os.path.dirname(__file__))
+# Verificação de segurança
+try:
+    import numpy as np
+    import cv2
+except ImportError:
+    print("\n[ERRO] Bibliotecas nativas não encontradas!")
+    sys.exit(1)
 
-
-class YouBotController:
-    def __init__(self):
-        self.robot = Robot()
-        self.time_step = int(self.robot.getBasicTimeStep())
-
-        self.base = Base(self.robot)
-        self.arm = Arm(self.robot)
-        self.gripper = Gripper(self.robot)
-
-        self.camera = self.robot.getDevice("camera")
-        self.camera.enable(self.time_step)
-
-        self.lidar = self.robot.getDevice("lidar")
-        self.lidar.enable(self.time_step)
-
-    def run(self):
-        raise NotImplementedError
+import lidar_processing as lp
+import fuzzy_logic as fl
+import image_processing as ip
+import estados
 
 
-class LidarNavigationController(YouBotController):
-    """Navegação local usando VFH frontal (sem recuo)."""
-
+class YouBotFSM(Robot):
     def __init__(self):
         super().__init__()
-        print("Controlador VFH ativo (LiDAR frontal, sem recuo).")
+        self.time_step = int(self.getBasicTimeStep())
+
+        self.base = Base(self)
+        self.arm = Arm(self)
+        self.gripper = Gripper(self)
+
+        self.camera = self.getDevice("camera")
+        self.camera.enable(self.time_step)
+        self.lidar = self.getDevice("lidar")
+        self.lidar.enable(self.time_step)
+
+        self.estado = "BUSCA_CUBO"
+        self.dados_visao = None
+        self.cor_alvo = None
+
+        print(f">>> Sistema Iniciado: Estado = {self.estado}")
+
+    def mudar_estado(self, novo_estado):
+        if self.estado != novo_estado:
+            print(f">>> MUDANÇA DE ESTADO: {self.estado} -> {novo_estado}")
+            self.estado = novo_estado
 
     def run(self):
-        while self.robot.step(self.time_step) != -1:
-            range_image = self.lidar.getRangeImage()
+        while self.step(self.time_step) != -1:
+            # Percepção Global
+            self.dados_visao = ip.processar_imagem(self.camera)
 
-            angle = compute_vfh_direction(range_image)
+            # MÁQUINA DE ESTADOS
+            if self.estado == "BUSCA_CUBO":
+                proximo = estados.executar_busca(self.base, self.camera)
+                self.mudar_estado(proximo)
 
-            if angle is None:
-                print("Sem vale livre. Girando no lugar...")
-                self.base.turn_left()
+            elif self.estado == "APROXIMACAO":
+                if self.dados_visao["detected"]:
+                    self.cor_alvo = self.dados_visao["class"]
+                proximo = estados.executar_aproximacao(
+                    self.base, self.camera, self.lidar)
+                self.mudar_estado(proximo)
 
-            elif abs(angle) < 10:
-                print("Caminho à frente. Avançando.")
-                self.base.forwards()
+            elif self.estado == "COLETA":
+                # PASSA 'self' PARA USAR O WAIT DO SIMULADOR
+                proximo = estados.executar_coleta(self, self.arm, self.gripper)
+                self.mudar_estado(proximo)
 
-            elif angle > 0:
-                print(f"Giro à esquerda ({angle:.1f}°)")
-                self.base.turn_left()
+            elif self.estado == "NAVEGACAO_CAIXA":
+                proximo = estados.executar_navegacao_caixa(
+                    self.base, self.camera, self.lidar, self.cor_alvo)
+                self.mudar_estado(proximo)
 
-            else:
-                print(f"Giro à direita ({angle:.1f}°)")
-                self.base.turn_right()
+            elif self.estado == "DEPOSITO":
+                # PASSA 'self' PARA USAR O WAIT DO SIMULADOR
+                proximo = estados.executar_deposito(
+                    self, self.arm, self.gripper)
+                if proximo == "BUSCA_CUBO":
+                    self.cor_alvo = None
+                self.mudar_estado(proximo)
 
 
 if __name__ == "__main__":
-    controller = LidarNavigationController()
-    controller.run()
-# Responsável por: Receber imagem da câmera, Pré-processar e enviar para YOLO.
-# Também retorna: detected, class, theta (erro angular do objeto detectado em relação a posição da câmera)
+    robot = YouBotFSM()
+    robot.run()
