@@ -1,0 +1,7 @@
+obstaculo
+cubo_azul
+cubo_vermelho
+cubo_verde
+caixa_azul
+caixa_vermelha
+caixa_verde
