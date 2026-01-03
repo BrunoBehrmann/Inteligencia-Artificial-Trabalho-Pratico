@@ -1,145 +1,174 @@
 from controller import Robot
 from base import Base
-from arm import Arm
+from arm import Arm, ArmHeight
 from gripper import Gripper
-import math
+
+# Importando nossos módulos
+from fuzzy_control import FuzzyController
+from manipulation import ManipulationManager
+from perception import PerceptionSystem
 
 
-def detect_obstacles_from_lidar(lidar,
-                                min_range=0.05,
-                                max_range=5.0,
-                                min_cluster_size=3):
-    """Detecta obstáculos simples a partir do Lidar do Webots.
-
-    Retorna uma lista de dicionários com chaves: 'x','y','distance','angle','radius','size'.
-    Coordenadas no referencial do robô: x = frente, y = esquerda (metros).
-    """
-    try:
-        ranges = lidar.getRangeImage()
-    except Exception:
-        return []
-
-    if ranges is None:
-        return []
-
-    n = len(ranges)
-    # tenta ler FOV e resolução; usa fallback se não existir
-    try:
-        fov = lidar.getFov()  # em rad
-    except Exception:
-        fov = math.radians(180)
-
-    try:
-        res = lidar.getHorizontalResolution()
-    except Exception:
-        res = n if n > 0 else 1
-
-    # ângulo do feixe i: começa em -fov/2 até +fov/2
-    angles = [(-fov / 2.0) + (i * (fov / res)) for i in range(n)]
-
-    # máscara de leituras válidas
-    valid = []
-    for r in ranges:
-        if r is None or math.isinf(r) or math.isnan(r):
-            valid.append(False)
-        else:
-            valid.append((r >= min_range) and (r <= max_range))
-
-    clusters = []
-    i = 0
-    while i < n:
-        if not valid[i]:
-            i += 1
-            continue
-
-        # inicia cluster
-        j = i
-        acc = []
-        while j < n and valid[j]:
-            acc.append((angles[j], ranges[j]))
-            j += 1
-
-        # se cluster grande o suficiente, computa centro aproximado
-        if len(acc) >= min_cluster_size:
-            mean_r = sum(r for a, r in acc) / len(acc)
-            mean_a = sum(a for a, r in acc) / len(acc)
-
-            x = mean_r * math.cos(mean_a)
-            y = mean_r * math.sin(mean_a)
-
-            a0, r0 = acc[0]
-            a1, r1 = acc[-1]
-            x0, y0 = r0 * math.cos(a0), r0 * math.sin(a0)
-            x1, y1 = r1 * math.cos(a1), r1 * math.sin(a1)
-            width = math.hypot(x1 - x0, y1 - y0)
-            radius = max(width / 2.0, 0.03)
-
-            clusters.append({
-                'x': x,
-                'y': y,
-                'distance': mean_r,
-                'angle': mean_a,
-                'radius': radius,
-                'size': len(acc)
-            })
-
-        i = j
-
-    return clusters
-
-
-class YouBotController:
+class MissionController:
     def __init__(self):
         self.robot = Robot()
-        self.time_step = int(self.robot.getBasicTimeStep())
+        self.timestep = int(self.robot.getBasicTimeStep())
 
+        # Hardware
         self.base = Base(self.robot)
         self.arm = Arm(self.robot)
         self.gripper = Gripper(self.robot)
 
-        self.camera = self.robot.getDevice("camera")
-        self.camera.enable(self.time_step)
+        # Módulos Personalizados
+        self.fuzzy = FuzzyController()
+        self.manipulation = ManipulationManager(self.arm, self.gripper)
+        self.perception = PerceptionSystem(
+            self.robot.getDevice("lidar"),
+            self.robot.getDevice("camera")
+        )
 
-        self.lidar = self.robot.getDevice("lidar")
-        self.lidar.enable(self.time_step)
-        # inicialização pronta; lógica de movimento ficará em run()
+        # Habilitar sensores
+        self.robot.getDevice("lidar").enable(self.timestep)
+        self.robot.getDevice("camera").enable(self.timestep)
+        self.robot.getDevice("lidar").enablePointCloud()
+
+        # Estado Inicial
+        self.state = "SEARCH_CUBE"
+        self.current_target_color = None
+
+        # Config Inicial
+        self.arm.set_height(ArmHeight.RESET)
+        self.gripper.release()
+
+        # --- Variáveis de Controle ---
+        self.step_counter = 0
+        self.last_cube_detection = (False, 0.0, None)
+        self.last_box_detection = (False, 0.0, None)
+
+        # --- SUAVIZAÇÃO (Rampa) ---
+        self.current_vx = 0.0
+        self.current_omega = 0.0
 
     def run(self):
-        """Loop principal: anda em linha reta e para caso o LIDAR detecte obstáculo a <= 0.5 m.
+        while self.robot.step(self.timestep) != -1:
 
-        Lógica:
-        - a cada passo lê o LIDAR e agrupa clusters simples
-        - se houver um cluster com ângulo dentro de +/-20° e distância <= 0.5, para a base
-        - caso contrário, mantém a base andando para frente
-        """
-        print("YouBotController: iniciando controle com LIDAR")
+            run_vision = (self.step_counter % 5 == 0)
 
-        while self.robot.step(self.time_step) != -1:
-            obstacles = detect_obstacles_from_lidar(
-                self.lidar, min_range=0.05, max_range=3.0)
+            # 1. PERCEPÇÃO
+            _, raw_dist = self.perception.get_fuzzy_dist()
 
-            # imprime obstáculos detectados (útil para debug)
-            for obs in obstacles:
-                print(
-                    f"obstáculo a {obs['distance']:.2f}m, ângulo {math.degrees(obs['angle']):.1f}°, pos ({obs['x']:.2f},{obs['y']:.2f}), raio {obs['radius']:.2f}")
-
-            # verifica se existe obstáculo frontal próximo
-            stop = False
-            for obs in obstacles:
-                if abs(obs['angle']) < math.radians(20) and obs['distance'] <= 0.5:
-                    stop = True
-                    break
-
-            if stop:
-                # para a base imediatamente
-                self.base.reset()
+            # Cálculo Real do Risco (para quando estiver detectando algo)
+            if raw_dist < 0.1:
+                risco_real = 1.0
             else:
-                # anda em linha reta
-                self.base.forwards()
+                risco_real = min(1.0, 0.5 / raw_dist)
 
-        print("YouBotController: simulador finalizado ou parada solicitada")
+            # 2. MÁQUINA DE ESTADOS
+            # Por padrão, assumimos risco real e direção 0
+            risco_input = risco_real
+            direcao_input = 0.0
+
+            found = False
+
+            # --- ESTADO: PROCURAR CUBO ---
+            if self.state == "SEARCH_CUBE":
+                if run_vision:
+                    found, error, color = self.perception.detect_target('cubo')
+                    self.last_cube_detection = (found, error, color)
+                    if found:
+                        print(f"[YOLO] Cubo: {color} | Erro: {error:.2f}")
+
+                found, error, color = self.last_cube_detection
+
+                if found:
+                    # Se achou, usa o erro real e o risco real
+                    direcao_input = error
+
+                    if raw_dist < 0.35 and abs(error) < 0.15:
+                        print("--- PEGANDO CUBO ---")
+                        self.base.reset()
+                        self.current_target_color = color
+                        self.manipulation.reset_sequence()
+                        self.state = "PICKUP_SEQUENCE"
+                        self.current_vx = 0.0
+                        self.current_omega = 0.0
+                else:
+                    # --- MODO BUSCA (SOLUÇÃO FUZZY PURA) ---
+                    # Criamos um "Alvo Fantasma" na direita
+                    # 1.5 rad é "Muito à Direita" no universo do Fuzzy
+                    direcao_input = 1.5
+
+                    # Forçamos Risco Zero para o Fuzzy liberar velocidade
+                    risco_input = 0.0
+
+            # --- ESTADO: PEGAR ---
+            elif self.state == "PICKUP_SEQUENCE":
+                if self.manipulation.run_pickup_sequence():
+                    self.state = "SEARCH_BOX"
+                    self.last_box_detection = (False, 0.0, None)
+                self.step_counter += 1
+                continue
+
+            # --- ESTADO: PROCURAR CAIXA ---
+            elif self.state == "SEARCH_BOX":
+                if run_vision:
+                    found, error, _ = self.perception.detect_target(
+                        'caixa', self.current_target_color)
+                    self.last_box_detection = (found, error, None)
+
+                found, error, _ = self.last_box_detection
+
+                if found:
+                    direcao_input = error
+                    if raw_dist < 0.45 and abs(error) < 0.15:
+                        print("--- DEPOSITANDO ---")
+                        self.base.reset()
+                        self.manipulation.reset_sequence()
+                        self.state = "DEPOSIT_SEQUENCE"
+                        self.current_vx = 0.0
+                        self.current_omega = 0.0
+                else:
+                    # Busca Circular à Direita
+                    direcao_input = 1.5
+                    risco_input = 0.0
+
+            # --- ESTADO: DEPOSITAR ---
+            elif self.state == "DEPOSIT_SEQUENCE":
+                if self.manipulation.run_deposit_sequence():
+                    self.state = "BACKING_UP"
+                    self.backup_timer = 0
+                self.step_counter += 1
+                continue
+
+            # --- ESTADO: RECUO ---
+            elif self.state == "BACKING_UP":
+                self.backup_timer += 1
+                self.base.move(-0.2, 0, 0)
+                if self.backup_timer > 40:
+                    print("--- REINICIANDO ---")
+                    self.base.reset()
+                    self.state = "SEARCH_CUBE"
+                    self.last_cube_detection = (False, 0.0, None)
+                self.step_counter += 1
+                continue
+
+            # 3. NAVEGAÇÃO FUZZY (A Lógica acontece aqui!)
+            # O controlador recebe (Direita=1.5, Risco=0)
+            # Regra ativada interna: IF Risco Baixo AND Direção Direita THEN W = Dir_Suave/Medio
+            target_v, target_w = self.fuzzy.compute(direcao_input, risco_input)
+
+            # --- FILTRO DE RAMPA ---
+            alpha = 0.2
+            self.current_vx = (1 - alpha) * self.current_vx + alpha * target_v
+            self.current_omega = (1 - alpha) * \
+                self.current_omega + alpha * target_w
+
+            # Envia para a base
+            self.base.move(self.current_vx, 0, self.current_omega)
+
+            self.step_counter += 1
 
 
 if __name__ == "__main__":
-    controller = YouBotController()
+    controller = MissionController()
     controller.run()

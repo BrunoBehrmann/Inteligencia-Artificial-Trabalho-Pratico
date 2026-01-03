@@ -23,21 +23,20 @@ else:
     x_min, x_max = -3, 1.75
     y_min, y_max = -1, 1
 
-# print(f"Spawner: {n_objects} objects in X[{x_min},{x_max}] Y[{y_min},{y_max}]")
-
+#print(f"Spawner: {n_objects} objects in X[{x_min},{x_max}] Y[{y_min},{y_max}]")
 
 def get_existing_obstacles():
-    """Extrai posições de WoodenBoxes e PlasticFruitBoxes presentes no mundo."""
+    """Extract positions of WoodenBoxes and PlasticFruitBoxes from the world."""
     obstacles = []
     n = root_children.getCount()
     for i in range(n):
         node = root_children.getMFNode(i)
         type_name = node.getTypeName()
-
+        
         if type_name in ["WoodenBox", "PlasticFruitBox"]:
             trans_field = node.getField("translation")
             size_field = node.getField("size")
-
+            
             if trans_field:
                 pos = trans_field.getSFVec3f()
                 if size_field:
@@ -45,19 +44,18 @@ def get_existing_obstacles():
                     radius = math.sqrt(size[0]**2 + size[1]**2) / 2
                 else:
                     radius = 0.3
-
+                
                 obstacles.append({
                     'x': pos[0],
                     'y': pos[1],
                     'radius': radius + 0.1
                 })
-                # print(f"Obstáculo encontrado em ({pos[0]:.2f}, {pos[1]:.2f}) com raio {radius:.2f}")
-
+                #print(f"Found obstacle at ({pos[0]:.2f}, {pos[1]:.2f}) with radius {radius:.2f}")
+    
     return obstacles
 
-
 def delete_existing_objects():
-    """Remove objetos previamente gerados (spawns)."""
+    """Remove previously spawned objects."""
     n = root_children.getCount()
     for i in reversed(range(n)):
         node = root_children.getMFNode(i)
@@ -66,7 +64,6 @@ def delete_existing_objects():
             node_name = name_field.getSFString()
             if node_name.startswith(("cube_", "cylinder_", "sphere_")):
                 node.remove()
-
 
 delete_existing_objects()
 
@@ -78,36 +75,33 @@ existing_obstacles = get_existing_obstacles()
 
 positions = []
 colors = [
-    (0, 1, 0),  # verde
-    (1, 0, 0),  # vermelho
-    (0, 0, 1),  # azul
+    (0, 1, 0),  # green
+    (1, 0, 0),  # red
+    (0, 0, 1),  # blue
 ]
 shapes = ["cube"]
 
-
 def random_pos():
-    """Gera uma posição aleatória no piso dentro da área configurada."""
+    """Generate random position on the floor."""
     return (
         random.uniform(x_min, x_max),
         random.uniform(y_min, y_max),
         size / 2 + 0.001
     )
 
-
 def is_far_enough(pos):
-    """Verifica se uma posição está suficientemente distante de outros objetos gerados e obstáculos existentes."""
+    """Check if position is far from both spawned objects and existing obstacles."""
     for q in positions:
         dx, dy = pos[0] - q[0], pos[1] - q[1]
         if math.hypot(dx, dy) < min_dist:
             return False
-
+    
     for obs in existing_obstacles:
         dx, dy = pos[0] - obs['x'], pos[1] - obs['y']
         if math.hypot(dx, dy) < (obs['radius'] + size):
             return False
-
+    
     return True
-
 
 spawned_count = 0
 failed_spawns = 0
@@ -116,28 +110,27 @@ max_attempts = 100
 for i in range(n_objects):
     tries = 0
     success = False
-
+    
     while tries < max_attempts:
         tries += 1
         pos = random_pos()
         if is_far_enough(pos):
             success = True
             break
-
+    
     if not success:
-        print(
-            f"Aviso: Não foi possível encontrar posição válida para o objeto {i} após {max_attempts} tentativas")
+        print(f"Warning: Could not find valid position for object {i} after {max_attempts} attempts")
         failed_spawns += 1
         continue
-
+    
     positions.append(pos)
     shape_type = random.choice(shapes)
     color = random.choice(colors)
-
+    
     if shape_type == "cube":
         geometry = f"Box {{ size {size} {size} {size} }}"
         bounding = f"Box {{ size {size} {size} {size} }}"
-
+    
     # Node string
     node_string = f"""
     Solid {{
@@ -164,14 +157,13 @@ for i in range(n_objects):
     root_children.importMFNodeFromString(-1, node_string)
     spawned_count += 1
 
-print(
-    f"Spawn complete. The supervisor has spawned {spawned_count}/{n_objects} objects ({failed_spawns} failed).")
-# print("Inicializando física...")
+print(f"Spawn complete. The supervisor has spawned {spawned_count}/{n_objects} objects ({failed_spawns} failed).")
+#print("Initializing physics...")
 
 for _ in range(20):
     supervisor.step(timestep)
 
-# print("Supervisor pronto.")
+#print("Supervisor ready.")
 
-# while supervisor.step(timestep) != -1:
-    # pass
+#while supervisor.step(timestep) != -1:
+    #pass

@@ -16,71 +16,69 @@ limitations under the License.
 Description: Python wrapper for YouBot gripper control
 """
 
-# Posições do gripper
+# Gripper positions
 MIN_POS = 0.0
 MAX_POS = 0.025
 OFFSET_WHEN_LOCKED = 0.021
 
-
 def bound(value, min_val, max_val):
-    """Limita um valor entre `min_val` e `max_val`."""
+    """Clamp value between min and max"""
     return max(min_val, min(max_val, value))
 
-
 class Gripper:
-    """Controla o gripper paralelo do YouBot."""
-
+    """Controls the YouBot parallel gripper"""
+    
     def __init__(self, robot):
-        """Inicializa o motor do gripper.
-
+        """Initialize gripper motors
+        
         Args:
-            robot: instância `Robot` do Webots
+            robot: Webots Robot instance
         """
         self.robot = robot
         self.time_step = int(robot.getBasicTimeStep())
-
-        # Obtém o motor do dedo do gripper (um motor controla ambos os dedos)
+        
+        # Get gripper finger motor (single motor controls both fingers)
         self.finger = robot.getDevice("finger::left")
-
-        # Configura velocidade para controle de posição
+        
+        # Set velocity for position control
         if self.finger:
             self.finger.setVelocity(0.03)
         else:
-            print("Aviso: Não foi possível encontrar o motor do gripper 'finger::left'")
-
-        # Estado atual
+            print("Warning: Could not find gripper motor 'finger::left'")
+        
+        # Current state
         self.is_gripping = False
-
+    
     def grip(self):
-        """Fecha o gripper para agarrar um objeto."""
+        """Close gripper to grip an object"""
         if self.finger:
             self.finger.setPosition(MIN_POS)
         self.is_gripping = True
-
+    
     def release(self):
-        """Abre o gripper para soltar um objeto."""
+        """Open gripper to release an object"""
         if self.finger:
             self.finger.setPosition(MAX_POS)
         self.is_gripping = False
-
+    
     def set_gap(self, gap):
-        """Define a folga específica entre os dedos do gripper.
-
+        """Set gripper to a specific gap width between fingers
+        
         Args:
-            gap: folga desejada entre os dedos em metros
+            gap: desired gap between fingers in meters
         """
-        # Calcula a posição do motor com compensação de offset
+        # Calculate motor position with offset compensation
         v = bound(0.5 * (gap - OFFSET_WHEN_LOCKED), MIN_POS, MAX_POS)
-
+        
         if self.finger:
             self.finger.setPosition(v)
-
+        
         self.is_gripping = (v < MAX_POS / 2)
-
+    
     def is_closed(self):
-        """Verifica se o gripper está fechado/agarrando.
-
+        """Check if gripper is in closed/gripping state
+        
         Returns:
-            bool: True se o gripper estiver agarrando
+            bool: True if gripper is gripping
         """
         return self.is_gripping
