@@ -25,12 +25,12 @@ class Perception:
         # IMPORTANTE: Definimos os nomes manualmente caso o ONNX tenha perdido essa info
         # A ordem deve ser EXATAMENTE a do seu data.yaml
         self.class_names = {
-            0: 'obstáculo',
-            1: 'cubo azul',
-            2: 'cubo vermelho',
-            3: 'cubo verde',
-            4: 'caixa azul',
-            5: 'caixa vermelha',
+            0: 'obstaculo',
+            1: 'cubo_azul',
+            2: 'cubo_vermelho',
+            3: 'cubo_verde',
+            4: 'caixa_azul',
+            5: 'caixa_vermelha',
             6: 'caixa_verde'
         }
 
