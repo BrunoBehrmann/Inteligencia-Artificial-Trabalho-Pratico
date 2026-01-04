@@ -5,7 +5,7 @@ from ultralytics import YOLO
 
 
 class Perception:
-    def __init__(self, camera, model_path="best.onnx"):
+    def __init__(self, camera, model_path="best.pt"):
         self.camera = camera
         print(f"[PERCEPTION] Carregando modelo de: {model_path}")
 
@@ -14,7 +14,7 @@ class Perception:
             self.model = YOLO(model_path, task='detect')
             print("[PERCEPTION] Modelo carregado com sucesso!")
         except Exception as e:
-            print(f"[ERRO] Falha ao carregar best.onnx: {e}")
+            print(f"[ERRO] Falha ao carregar best.pt: {e}")
             self.model = None
 
         self.last_time = 0.0
@@ -73,7 +73,7 @@ class Perception:
 
         # 4. Inferência
         # Baixamos a confiança para 0.1 (10%) para ver se ele detecta ALGO
-        results = self.model(frame, conf=0.1, verbose=False)[0]
+        results = self.model(frame, conf=0.8, verbose=False)[0]
 
         detections = []
 

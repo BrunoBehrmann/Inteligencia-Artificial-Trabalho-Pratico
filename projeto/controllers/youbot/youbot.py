@@ -17,7 +17,7 @@ class YouBotController:
         self.camera = self.robot.getDevice("camera")
         self.camera.enable(self.time_step)
 
-        self.perception = Perception(self.camera, "yolov8n.pt")
+        self.perception = Perception(self.camera, "best.pt")
 
         self.state = "SEARCH"
         self.turn_speed = 0.1
