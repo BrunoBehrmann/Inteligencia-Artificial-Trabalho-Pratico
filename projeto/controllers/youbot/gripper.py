@@ -17,7 +17,7 @@ Description: Python wrapper for YouBot gripper control
 """
 
 # Gripper positions
-MIN_POS = 0.001
+MIN_POS = 0.002
 MAX_POS = 0.035
 OFFSET_WHEN_LOCKED = 0.021
 
@@ -42,7 +42,7 @@ class Gripper:
         
         # Set velocity for position control
         if self.finger:
-            self.finger.setVelocity(0.03)
+            self.finger.setVelocity(0.02)
         else:
             print("Warning: Could not find gripper motor 'finger::left'")
         
