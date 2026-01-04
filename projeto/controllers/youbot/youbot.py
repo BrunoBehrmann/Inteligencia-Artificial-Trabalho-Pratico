@@ -7,7 +7,7 @@ import math
 
 class YouBotController:
     def __init__(self):
-        # --- INICIALIZAÇÃO DO ROBÔ ---
+        # --- INICIALIZAÇÃO ---
         self.robot = Robot()
         self.time_step = int(self.robot.getBasicTimeStep())
 
@@ -15,259 +15,212 @@ class YouBotController:
         self.arm = Arm(self.robot)
         self.gripper = Gripper(self.robot)
 
-        # --- SENSORES DE VISÃO ---
+        # --- VISÃO ---
         self.camera = self.robot.getDevice("camera")
         self.camera.enable(self.time_step)
+        self.cam_width = self.camera.getWidth()
         
-        # Perception: Intervalo baixo para tracking fluido
         self.perception = Perception(self.camera, "best.pt")
         self.perception.interval = 0.05  
 
-        # --- SENSORES LIDAR ---
+        # --- LIDARS ---
         self.lidar_front = self.robot.getDevice("lidar")
         self.lidar_front.enable(self.time_step)
         self.lidar_front.enablePointCloud()
+        self.lidar_width = self.lidar_front.getHorizontalResolution()
+        self.lidar_fov = self.lidar_front.getFov()
 
         self.lidar_top = self.robot.getDevice("lidar2") 
         self.lidar_top.enable(self.time_step)
         self.lidar_top.enablePointCloud()
 
-        # --- VARIÁVEIS DE ESTADO ---
-        self.state = "SEARCH"
+        # --- ESTADOS ---
+        self.state = "SEARCH_RADAR" 
         self.target_cube_label = None 
-        
-        # Guarda a última posição (x,y) do alvo para rastreamento
         self.last_target_center = None 
         
-        # Timers
         self.state_timer = 0
         self.grab_timer = 0
         self.avoid_timer = 0
         
-        # --- PARÂMETROS FÍSICOS ---
+        # --- PARÂMETROS ---
         self.turn_speed = 0.5
-        self.distancia_ideal_pegar = 0.10
+        self.distancia_ideal_pegar = 0.11
 
-    # --- LEITURA DOS LIDARS ---
-    def get_lidar_distances(self):
+    def obter_erro_angular_lidar(self):
         range_front = self.lidar_front.getRangeImage()
         range_top = self.lidar_top.getRangeImage()
-
-        if not range_front or not range_top:
-            return 99.0, 99.0
-
-        width = self.lidar_front.getHorizontalResolution()
-        mid = int(width / 2)
-        window = 10 
         
-        vals_front = [x for x in range_front[mid-window : mid+window] 
-                      if x < 20.0 and x != float('inf')]
-        dist_baixo = sum(vals_front)/len(vals_front) if vals_front else 10.0
+        if not range_front: return None, 99.0
 
-        vals_top = [x for x in range_top[mid-window : mid+window] 
-                    if x < 20.0 and x != float('inf')]
-        dist_cima = sum(vals_top)/len(vals_top) if vals_top else 10.0
+        melhor_distancia = 999.0
+        melhor_indice = -1
 
-        return dist_baixo, dist_cima
+        for i in range(self.lidar_width):
+            d_baixo = range_front[i]
+            d_cima = range_top[i]
 
-    # --- LÓGICA FUZZY ---
-    def calcular_velocidade_fuzzy(self, distancia_alvo):
-        # 1. Pertinência
-        is_perto = 1.0 if distancia_alvo < 0.4 else max(0, 1 - (distancia_alvo - 0.4)/0.5)
-        is_longe = 1.0 - is_perto
+            # Filtros
+            if d_baixo > 1.2 or d_baixo < 0.05: continue
 
-        # 2. Regras
-        peso_rapido = is_longe
-        peso_lento = is_perto
+            # Geometria
+            eh_cubo = (d_baixo < 2.0) and (d_cima == float('inf') or (d_cima > d_baixo + 0.15))
 
-        # 3. Defuzzification
-        numerador = (peso_rapido * 1.5) + (peso_lento * 0.2)
-        denominador = peso_rapido + peso_lento + 0.0001
+            if eh_cubo:
+                if d_baixo < melhor_distancia:
+                    melhor_distancia = d_baixo
+                    melhor_indice = i
+
+        if melhor_indice != -1:
+            center_index = self.lidar_width / 2
+            erro_index = (melhor_indice - center_index)
+            angulo_erro = (erro_index / self.lidar_width) * self.lidar_fov
+            return -angulo_erro, melhor_distancia
         
-        return numerador / denominador
+        return None, 99.0
 
-    # --- FUNÇÃO AUXILIAR DE TRACKING ---
-    def encontrar_melhor_alvo(self, detections, center_cam):
-        candidatos = [d for d in detections if d['label'] == self.target_cube_label]
-        
-        if not candidatos:
-            return None
+    def get_lidar_center_dist(self):
+        range_front = self.lidar_front.getRangeImage()
+        if not range_front: return 99.0
+        mid = int(self.lidar_width / 2)
+        vals = [x for x in range_front[mid-20 : mid+20] if 0.04 < x < 2.0]
+        return min(vals) if vals else 99.0
 
-        if self.last_target_center is not None:
-            # MODO TRACKING
-            return min(candidatos, key=lambda c: math.dist(c['center'], self.last_target_center))
-        else:
-            # MODO BUSCA
-            return min(candidatos, key=lambda c: abs(center_cam - c['center'][0]))
-
-    # --- LOOP PRINCIPAL ---
     def run(self):
-        print("=== YOUBOT: TIMING DA GARRA AJUSTADO ===")
+        print("=== YOUBOT: MODO DEBUG ATIVADO ===")
         center_cam = self.camera.getWidth() / 2
-        
         self.arm.reset()
         self.gripper.release()
 
         while self.robot.step(self.time_step) != -1:
             img, detections = self.perception.get_detections()
-            dist_baixo, dist_cima = self.get_lidar_distances()
+            dist_centro = self.get_lidar_center_dist()
 
             # ---------------------------------------------------------
-            # 1. SEARCH
+            # 1. SEARCH_RADAR
             # ---------------------------------------------------------
-            if self.state == "SEARCH":
-                self.base.move(0.0, 0.0, -self.turn_speed) 
-                
-                self.last_target_center = None 
+            if self.state == "SEARCH_RADAR":
+                erro_ang, dist_obj = self.obter_erro_angular_lidar()
 
-                if detections:
-                    cubos = [d for d in detections if 'cubo' in d['label'] or 'cube' in d['label']]
-                    if cubos:
-                        melhor_cubo = min(cubos, key=lambda c: abs(center_cam - c['center'][0]))
-                        
-                        self.target_cube_label = melhor_cubo['label']
-                        self.last_target_center = melhor_cubo['center'] 
-                        
-                        print(f"--> [VISÃO] Alvo Novo: {self.target_cube_label}")
+                if erro_ang is not None:
+                    # DEBUG RADAR
+                    # print(f"   [RADAR] Alvo Potencial: {dist_obj:.2f}m | Erro: {erro_ang:.2f}")
+
+                    if dist_obj < 0.40: 
+                        print(f"--> [RADAR] Perto o suficiente ({dist_obj:.2f}m). Identificando...")
                         self.base.reset()
-                        self.state = "PRE_ALIGN"
+                        self.state = "IDENTIFY_COLOR"
+                        self.state_timer = 0
+                        continue
 
-            # ---------------------------------------------------------
-            # 2. PRE_ALIGN
-            # ---------------------------------------------------------
-            elif self.state == "PRE_ALIGN":
-                alvo = self.encontrar_melhor_alvo(detections, center_cam)
-                
-                if alvo:
-                    self.last_target_center = alvo['center'] 
-                    
-                    erro = center_cam - alvo['center'][0]
-                    
-                    if abs(erro) < 30: 
+                    if abs(erro_ang) < 0.05:
                         self.base.reset()
-                        self.state = "VERIFY"
+                        self.state = "IDENTIFY_COLOR"
                         self.state_timer = 0
                     else:
-                        kp = -0.005 
-                        rot = kp * erro
-                        rot = max(min(rot, 0.8), -0.8)
+                        rot = erro_ang * 0.8
+                        rot = max(min(rot, 0.6), -0.6)
                         self.base.move(0.0, 0.0, rot)
                 else:
-                    print("Perdi o alvo no tracking (Pre-Align).")
-                    self.base.move(0.0, 0.0, 0.0)
-                    self.state = "SEARCH"
+                    self.base.move(0.0, 0.0, -self.turn_speed)
 
             # ---------------------------------------------------------
-            # 3. VERIFY
+            # 2. IDENTIFY_COLOR (DEBUG DETALHADO AQUI)
             # ---------------------------------------------------------
-            elif self.state == "VERIFY":
+            elif self.state == "IDENTIFY_COLOR":
                 self.base.reset()
                 self.state_timer += 1
-                if self.state_timer < 10: continue
+                if self.state_timer < 5: continue 
 
-                eh_baixo = (dist_baixo < 2.5)
-                eh_alto = (dist_cima < 2.5)
+                melhor_candidato = None
                 
-                if eh_baixo and not eh_alto:
-                    print(f"--> [LIDAR] Confirmado: Cubo.")
-                    self.state = "FINE_ALIGN" 
-                elif eh_baixo and eh_alto:
-                    print("--> [LIDAR] Parede. Fugindo.")
-                    self.state = "AVOID" 
-                    self.avoid_timer = 0
+                if detections:
+                    cubos = [d for d in detections if 'cubo' in d['label'] or 'cube' in d['label']]
+                    
+                    if cubos:
+                        print(f"--- [DEBUG VISÃO] Analisando {len(cubos)} candidatos ---")
+                        # Imprime a lista para você ver quem é quem
+                        for i, c in enumerate(cubos):
+                            # bbox[3] é a base do cubo. Quanto MAIOR, mais embaixo (perto).
+                            print(f"   Cand {i}: {c['label']} | Base Y (bbox3): {c['bbox'][3]:.1f} | Centro X: {c['center'][0]:.1f}")
+
+                        # A LÓGICA DE ESCOLHA:
+                        melhor_candidato = max(cubos, key=lambda c: c['bbox'][3])
+                        print(f"   >>> ESCOLHIDO: {melhor_candidato['label']} (Maior Y)")
+
+                if melhor_candidato:
+                    self.target_cube_label = melhor_candidato['label']
+                    self.last_target_center = melhor_candidato['center']
+                    print(f"--> [DECISÃO] Alvo travado: {self.target_cube_label}. Iniciando aproximação.")
+                    self.state = "APPROACH"
                 else:
-                    self.state = "FINE_ALIGN"
-
-            # ---------------------------------------------------------
-            # 4. FINE_ALIGN
-            # ---------------------------------------------------------
-            elif self.state == "FINE_ALIGN":
-                alvo = self.encontrar_melhor_alvo(detections, center_cam)
-                
-                if alvo:
-                    self.last_target_center = alvo['center'] 
-                    
-                    erro = center_cam - alvo['center'][0]
-                    
-                    if abs(erro) < 10:
-                        print("--> [MIRA] Travada. AVANÇAR!")
-                        self.base.reset()
-                        self.state = "APPROACH"
+                    if dist_centro < 0.2:
+                        print("--> [CEGO] Muito perto e sem visual. Tentando pegar mesmo assim.")
+                        self.state = "GRAB"
                     else:
-                        kp = -0.004 
-                        rot = kp * erro
-                        
-                        if rot > 0.3: rot = 0.3
-                        if rot < -0.3: rot = -0.3
-                        if rot > 0 and rot < 0.05: rot = 0.05
-                        if rot < 0 and rot > -0.05: rot = -0.05
-                        
-                        self.base.move(0.0, 0.0, rot)
-                else:
-                    self.state = "SEARCH"
+                        print("--> [FALHA] Nenhum cubo identificado. Voltando ao Radar.")
+                        self.state = "SEARCH_RADAR"
 
             # ---------------------------------------------------------
-            # 5. APPROACH
+            # 3. APPROACH
             # ---------------------------------------------------------
             elif self.state == "APPROACH":
-                alvo = self.encontrar_melhor_alvo(detections, center_cam)
-                
-                if alvo:
-                    self.last_target_center = alvo['center'] 
-                    
-                    erro = center_cam - alvo['center'][0]
-                    if abs(erro) > 40:
-                        print("--> [DESVIO] Realinhando...")
-                        self.base.reset()
-                        self.state = "FINE_ALIGN"
-                        continue 
-                
-                rotacao = 0.0
-                vel_frente = self.calcular_velocidade_fuzzy(dist_baixo)
-                
-                if dist_baixo <= (self.distancia_ideal_pegar):
-                    print("--> [NAV] Cheguei.")
+                candidatos = [d for d in detections if d['label'] == self.target_cube_label]
+                alvo = None
+                if candidatos:
+                    alvo = max(candidatos, key=lambda c: c['bbox'][3])
+
+                if dist_centro <= self.distancia_ideal_pegar:
+                    print(f"--> [NAV] Cheguei no alvo ({dist_centro:.3f}m).")
                     self.base.reset()
                     self.state = "GRAB"
                     self.grab_timer = 0
-                    vel_frente = 0.0
-                
-                if not alvo and dist_baixo < 0.5:
-                     if vel_frente > 0.3: vel_frente = 0.3
-                elif not alvo and dist_baixo >= 0.5:
-                     print("Perdi visual longe. Reiniciando.")
-                     self.state = "SEARCH"
-                     vel_frente = 0.0
+                    continue
 
-                self.base.move(vel_frente, 0, rotacao)
+                vel_frente = 0.0
+                rotacao = 0.0
+
+                if alvo:
+                    # DEBUG APPROACH
+                    # print(f"   [APP] Visual Ok. Dist: {dist_centro:.2f}m")
+                    self.last_target_center = alvo['center']
+                    erro = center_cam - alvo['center'][0]
+                    rotacao = -0.003 * erro
+                    
+                    if dist_centro > 0.3: vel_frente = 0.4
+                    else: vel_frente = 0.15 
+
+                elif dist_centro < 0.6:
+                    print(f"   [APP] Modo Cego (Perto: {dist_centro:.2f}m).")
+                    vel_frente = 0.15 
+                    rotacao = 0.0
+                else:
+                    print("--> [PERDA] Perdi alvo longe. Reiniciando.")
+                    self.state = "SEARCH_RADAR"
+                    vel_frente = 0.0
+
+                self.base.move(vel_frente, 0.0, rotacao)
 
             # ---------------------------------------------------------
-            # 6. GRAB (AJUSTADO PARA SÓ FECHAR DEPOIS QUE DESCER)
+            # 4. GRAB
             # ---------------------------------------------------------
             elif self.state == "GRAB":
                 self.base.reset()
                 self.grab_timer += 1
                 
-                # Passo 1: Começa a descer
+                if self.grab_timer == 1: print("--> [GRAB] Iniciando sequência de pega.")
+
                 if self.grab_timer == 20: 
-                    print("--> [BRAÇO] Baixando (Garra Aberta)...")
-                    self.gripper.release() # Garante que desce aberta
+                    self.gripper.release()
                     self.arm.set_height(Arm.FRONT_FLOOR)
-                
-                # Passo 2: ESPERA MAIS TEMPO (até 100) para garantir que chegou no chão
                 elif self.grab_timer == 100: 
-                    print("--> [GARRA] Agora sim, fechando...")
                     self.gripper.grip()
-                
-                # Passo 3: Espera fechar bem
                 elif self.grab_timer == 150: 
-                    print("--> [BRAÇO] Levantando...")
                     self.arm.set_height(Arm.FRONT_PLATE)
-                
-                # Passo 4: Fim
                 elif self.grab_timer > 220:
-                    print("--> [SUCESSO] Peguei! Voltando.")
-                    self.state = "SEARCH"
+                    print("--> [SUCESSO] Peguei! Voltando a buscar.")
+                    self.target_cube_label = None 
+                    self.state = "SEARCH_RADAR"
 
             # ---------------------------------------------------------
             # AVOID
@@ -275,8 +228,8 @@ class YouBotController:
             elif self.state == "AVOID":
                 self.base.move(0.0, 0.0, -self.turn_speed)
                 self.avoid_timer += 1
-                if self.avoid_timer > 40:
-                    self.state = "SEARCH"
+                if self.avoid_timer > 30:
+                    self.state = "SEARCH_RADAR"
 
 if __name__ == "__main__":
     controller = YouBotController()

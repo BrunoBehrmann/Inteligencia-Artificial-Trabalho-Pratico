@@ -8,4 +8,4 @@ orthographicViewHeight: 1
 textFiles: -1
 globalOptionalRendering: LidarPointClouds::LidarRaysPaths
 consoles: Console:All:All
-renderingDevicePerspectives: youBot:camera;1;0.234375;0;0
+renderingDevicePerspectives: youBot:camera;1;0.292187;0;0

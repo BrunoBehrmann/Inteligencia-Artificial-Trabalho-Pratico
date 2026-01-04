@@ -17,7 +17,7 @@ Description: Python wrapper for YouBot gripper control
 """
 
 # Gripper positions
-MIN_POS = 0.0
+MIN_POS = 0.001
 MAX_POS = 0.035
 OFFSET_WHEN_LOCKED = 0.021
 
