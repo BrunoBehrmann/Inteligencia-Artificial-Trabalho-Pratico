@@ -1,84 +1,76 @@
-import sys
 from controller import Robot
 from base import Base
 from arm import Arm
 from gripper import Gripper
-
-# Verificação de segurança
-try:
-    import numpy as np
-    import cv2
-except ImportError:
-    print("\n[ERRO] Bibliotecas nativas não encontradas!")
-    sys.exit(1)
-
-import lidar_processing as lp
-import fuzzy_logic as fl
-import image_processing as ip
-import estados
+from perception import Perception
 
 
-class YouBotFSM(Robot):
+class YouBotController:
     def __init__(self):
-        super().__init__()
-        self.time_step = int(self.getBasicTimeStep())
+        self.robot = Robot()
+        self.time_step = int(self.robot.getBasicTimeStep())
 
-        self.base = Base(self)
-        self.arm = Arm(self)
-        self.gripper = Gripper(self)
+        self.base = Base(self.robot)
+        self.arm = Arm(self.robot)
+        self.gripper = Gripper(self.robot)
 
-        self.camera = self.getDevice("camera")
+        self.camera = self.robot.getDevice("camera")
         self.camera.enable(self.time_step)
-        self.lidar = self.getDevice("lidar")
-        self.lidar.enable(self.time_step)
 
-        self.estado = "BUSCA_CUBO"
-        self.dados_visao = None
-        self.cor_alvo = None
+        self.perception = Perception(self.camera, "best.pt")
 
-        print(f">>> Sistema Iniciado: Estado = {self.estado}")
+        self.state = "SEARCH"
+        self.turn_speed = 0.1
 
-    def mudar_estado(self, novo_estado):
-        if self.estado != novo_estado:
-            print(f">>> MUDANÇA DE ESTADO: {self.estado} -> {novo_estado}")
-            self.estado = novo_estado
+        # Timers
+        self.timer = 0
+
+        # Configuração de tempos (convertidos para steps)
+        self.pause_duration = int(3000 / self.time_step)  # 3 seg parado
+        self.avoid_duration = int(
+            2000 / self.time_step)  # 2 seg girando "cego"
 
     def run(self):
-        while self.step(self.time_step) != -1:
-            # Percepção Global
-            self.dados_visao = ip.processar_imagem(self.camera)
+        print(f"=== MODO BUSCA COM GIRO CEGO ===")
 
-            # MÁQUINA DE ESTADOS
-            if self.estado == "BUSCA_CUBO":
-                proximo = estados.executar_busca(self.base, self.camera)
-                self.mudar_estado(proximo)
+        while self.robot.step(self.time_step) != -1:
+            _, detections = self.perception.get_detections()
 
-            elif self.estado == "APROXIMACAO":
-                if self.dados_visao["detected"]:
-                    self.cor_alvo = self.dados_visao["class"]
-                proximo = estados.executar_aproximacao(
-                    self.base, self.camera, self.lidar)
-                self.mudar_estado(proximo)
+            # --- ESTADO 1: PROCURANDO ---
+            if self.state == "SEARCH":
+                self.base.move(0.0, 0.0, -self.turn_speed)
 
-            elif self.estado == "COLETA":
-                # PASSA 'self' PARA USAR O WAIT DO SIMULADOR
-                proximo = estados.executar_coleta(self, self.arm, self.gripper)
-                self.mudar_estado(proximo)
+                if detections:
+                    print("\nDetectado:")
+                    for d in detections:
+                        print(f" - {d['label']} ({d['conf']:.2f})")
 
-            elif self.estado == "NAVEGACAO_CAIXA":
-                proximo = estados.executar_navegacao_caixa(
-                    self.base, self.camera, self.lidar, self.cor_alvo)
-                self.mudar_estado(proximo)
+                    self.base.reset()
+                    self.state = "PAUSE"
+                    self.timer = 0
 
-            elif self.estado == "DEPOSITO":
-                # PASSA 'self' PARA USAR O WAIT DO SIMULADOR
-                proximo = estados.executar_deposito(
-                    self, self.arm, self.gripper)
-                if proximo == "BUSCA_CUBO":
-                    self.cor_alvo = None
-                self.mudar_estado(proximo)
+            # --- ESTADO 2: PAUSA (ADMIRANDO O OBJETO) ---
+            elif self.state == "PAUSE":
+                self.base.reset()  # Garante que está parado
+                self.timer += 1
+
+                if self.timer >= self.pause_duration:
+                    print("Saindo da pausa, girando para afastar...")
+                    self.state = "AVOID"
+                    self.timer = 0
+
+            # --- ESTADO 3: AFASTANDO (GIRO CEGO) ---
+            elif self.state == "AVOID":
+                # Gira, mas NÃO verifica 'detections' aqui
+                self.base.move(0.0, 0.0, -self.turn_speed)
+                self.timer += 1
+
+                # Se já girou o suficiente para tirar o objeto da tela
+                if self.timer >= self.avoid_duration:
+                    print("Retomando busca visual...")
+                    self.state = "SEARCH"
 
 
 if __name__ == "__main__":
-    robot = YouBotFSM()
-    robot.run()
+    controller = YouBotController()
+    controller.run()

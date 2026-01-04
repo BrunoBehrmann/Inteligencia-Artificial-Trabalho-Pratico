@@ -1,0 +1,19 @@
+# Caminho absoluto é mais seguro para evitar erros.
+# Substitua SEU_USUARIO pelo seu nome de usuário do Windows
+path: 'D:\rso\Documents\Trabalho de IA\Inteligencia-Artificial-Trabalho-Pratico\projeto\treinameto da rede\datasets\cubos'
+
+train: train/images
+val: valid/images
+
+# Número de classes
+nc: 7
+
+# Nomes das classes (baseado no seu requisito: Verde, Azul, Vermelho)
+names:
+  0: obstaculo
+  1: cubo_azul
+  2: cubo_vermelho
+  3: cubo_verde
+  4: caixa_azul
+  5: caixa_vermelha
+  6: caixa_verde
