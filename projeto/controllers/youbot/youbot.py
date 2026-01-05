@@ -36,21 +36,55 @@ class YouBotController:
 
         # --- ESTADOS ---
         self.state = "SEARCH_RADAR" 
+        self.prev_state = "SEARCH_RADAR"
+        
         self.target_cube_label = None 
         self.last_target_center = None 
         
         self.state_timer = 0
         self.grab_timer = 0
         self.avoid_timer = 0
+        self.drift_command = (0, 0, 0)
         
         # --- PARÂMETROS ---
-        self.turn_speed = 0.5
+        self.turn_speed = 0.5 
         self.distancia_ideal_pegar = 0.11
+
+    # --- ESQUIVA ---
+    def checar_perigo_com_drift(self):
+        range_front = self.lidar_front.getRangeImage()
+        if not range_front: return False, (0,0,0)
+
+        limit_perigo = 0.2 
+        
+        setor_dir   = range_front[0:150]
+        setor_frente= range_front[150:360]
+        setor_esq   = range_front[360:]
+
+        def min_safe(vals):
+            validos = [x for x in vals if x > 0.04]
+            return min(validos) if validos else 99.0
+
+        d_dir = min_safe(setor_dir)
+        d_frente = min_safe(setor_frente)
+        d_esq = min_safe(setor_esq)
+
+        if d_frente < limit_perigo:
+            # print(f"--> [PERIGO] Frente bloqueada ({d_frente:.2f}m)! Driftando...")
+            if d_esq > d_dir: return True, (-0.1, 0.5, -0.2) 
+            else: return True, (-0.1, -0.5, 0.2)
+
+        elif d_esq < limit_perigo:
+            return True, (0.0, -0.4, 0.0)
+
+        elif d_dir < limit_perigo:
+            return True, (0.0, 0.4, 0.0)
+
+        return False, (0,0,0)
 
     def obter_erro_angular_lidar(self):
         range_front = self.lidar_front.getRangeImage()
         range_top = self.lidar_top.getRangeImage()
-        
         if not range_front: return None, 99.0
 
         melhor_distancia = 999.0
@@ -59,11 +93,8 @@ class YouBotController:
         for i in range(self.lidar_width):
             d_baixo = range_front[i]
             d_cima = range_top[i]
-
-            # Filtros
             if d_baixo > 1.2 or d_baixo < 0.05: continue
-
-            # Geometria
+            
             eh_cubo = (d_baixo < 2.0) and (d_cima == float('inf') or (d_cima > d_baixo + 0.15))
 
             if eh_cubo:
@@ -76,7 +107,6 @@ class YouBotController:
             erro_index = (melhor_indice - center_index)
             angulo_erro = (erro_index / self.lidar_width) * self.lidar_fov
             return -angulo_erro, melhor_distancia
-        
         return None, 99.0
 
     def get_lidar_center_dist(self):
@@ -87,7 +117,7 @@ class YouBotController:
         return min(vals) if vals else 99.0
 
     def run(self):
-        print("=== YOUBOT: MODO DEBUG ATIVADO ===")
+        print("=== YOUBOT: BUSCA REFORÇADA (IGNORA PAREDES) ===")
         center_cam = self.camera.getWidth() / 2
         self.arm.reset()
         self.gripper.release()
@@ -96,18 +126,46 @@ class YouBotController:
             img, detections = self.perception.get_detections()
             dist_centro = self.get_lidar_center_dist()
 
+            # --- PROTEÇÃO ---
+            modo_seguro = self.state not in ["APPROACH", "GRAB", "IGNORING"]
+            
+            if self.state != "DRIFT_EVASION" and modo_seguro:
+                perigo, comando_drift = self.checar_perigo_com_drift()
+                if perigo:
+                    self.prev_state = self.state 
+                    self.state = "DRIFT_EVASION"
+                    self.drift_command = comando_drift
+                    self.avoid_timer = 0
+                    
+            # --- MÁQUINA DE ESTADOS ---
+
+            if self.state == "DRIFT_EVASION":
+                vx, vy, rot = self.drift_command
+                self.base.move(vx, vy, rot)
+                self.avoid_timer += 1
+                if self.avoid_timer > 15:
+                    self.base.reset() 
+                    self.state = "SEARCH_RADAR" 
+                continue
+
             # ---------------------------------------------------------
+            # ESTADO NOVO: IGNORING (Girar cego para sair do obstáculo)
+            # ---------------------------------------------------------
+            if self.state == "IGNORING":
+                self.base.move(0.0, 0.0, -self.turn_speed) # Gira cego
+                self.avoid_timer += 1
+                # Gira por 30 steps (aprox 1 segundo) para garantir que mudou o alvo
+                if self.avoid_timer > 30:
+                    self.state = "SEARCH_RADAR"
+                continue
+
             # 1. SEARCH_RADAR
-            # ---------------------------------------------------------
             if self.state == "SEARCH_RADAR":
                 erro_ang, dist_obj = self.obter_erro_angular_lidar()
 
                 if erro_ang is not None:
-                    # DEBUG RADAR
-                    # print(f"   [RADAR] Alvo Potencial: {dist_obj:.2f}m | Erro: {erro_ang:.2f}")
-
                     if dist_obj < 0.40: 
-                        print(f"--> [RADAR] Perto o suficiente ({dist_obj:.2f}m). Identificando...")
+                        print(f"--> [RADAR] Candidato a {dist_obj:.2f}m. Verificando...")
                         self.base.reset()
                         self.state = "IDENTIFY_COLOR"
                         self.state_timer = 0
@@ -124,9 +182,7 @@ class YouBotController:
                 else:
                     self.base.move(0.0, 0.0, -self.turn_speed)
 
-            # ---------------------------------------------------------
-            # 2. IDENTIFY_COLOR (DEBUG DETALHADO AQUI)
-            # ---------------------------------------------------------
+            # 2. IDENTIFY_COLOR (Lógica corrigida)
             elif self.state == "IDENTIFY_COLOR":
                 self.base.reset()
                 self.state_timer += 1
@@ -134,36 +190,33 @@ class YouBotController:
 
                 melhor_candidato = None
                 
+                # Filtra APENAS o que é cubo. Se for obstáculo, a lista fica vazia.
                 if detections:
                     cubos = [d for d in detections if 'cubo' in d['label'] or 'cube' in d['label']]
-                    
                     if cubos:
-                        print(f"--- [DEBUG VISÃO] Analisando {len(cubos)} candidatos ---")
-                        # Imprime a lista para você ver quem é quem
-                        for i, c in enumerate(cubos):
-                            # bbox[3] é a base do cubo. Quanto MAIOR, mais embaixo (perto).
-                            print(f"   Cand {i}: {c['label']} | Base Y (bbox3): {c['bbox'][3]:.1f} | Centro X: {c['center'][0]:.1f}")
-
-                        # A LÓGICA DE ESCOLHA:
                         melhor_candidato = max(cubos, key=lambda c: c['bbox'][3])
-                        print(f"   >>> ESCOLHIDO: {melhor_candidato['label']} (Maior Y)")
 
                 if melhor_candidato:
                     self.target_cube_label = melhor_candidato['label']
                     self.last_target_center = melhor_candidato['center']
-                    print(f"--> [DECISÃO] Alvo travado: {self.target_cube_label}. Iniciando aproximação.")
+                    print(f"--> [VISÃO] Confirmado: {self.target_cube_label}.")
                     self.state = "APPROACH"
                 else:
-                    if dist_centro < 0.2:
-                        print("--> [CEGO] Muito perto e sem visual. Tentando pegar mesmo assim.")
-                        self.state = "GRAB"
+                    # Se não é cubo, é LIXO (parede, obstáculo).
+                    
+                    # Checagem de segurança para "ponto cego" (cubo colado na câmera)
+                    # Só arrisca pegar se não tiver detectado NENHUM obstáculo explicitamente
+                    tem_obstaculo = any('obstaculo' in d['label'] for d in detections)
+                    
+                    if dist_centro < 0.2 and not tem_obstaculo:
+                        print("Perto demais e sem obstáculo visível. Arriscando pegar.")
+                        self.state = "GRAB" 
                     else:
-                        print("--> [FALHA] Nenhum cubo identificado. Voltando ao Radar.")
-                        self.state = "SEARCH_RADAR"
+                        print("--> [IGNORAR] Vi algo mas não é cubo. Girando para ignorar.")
+                        self.state = "IGNORING" # Vai girar cego para sair do loop
+                        self.avoid_timer = 0
 
-            # ---------------------------------------------------------
             # 3. APPROACH
-            # ---------------------------------------------------------
             elif self.state == "APPROACH":
                 candidatos = [d for d in detections if d['label'] == self.target_cube_label]
                 alvo = None
@@ -171,7 +224,7 @@ class YouBotController:
                     alvo = max(candidatos, key=lambda c: c['bbox'][3])
 
                 if dist_centro <= self.distancia_ideal_pegar:
-                    print(f"--> [NAV] Cheguei no alvo ({dist_centro:.3f}m).")
+                    print("--> [NAV] Cheguei.")
                     self.base.reset()
                     self.state = "GRAB"
                     self.grab_timer = 0
@@ -181,8 +234,6 @@ class YouBotController:
                 rotacao = 0.0
 
                 if alvo:
-                    # DEBUG APPROACH
-                    # print(f"   [APP] Visual Ok. Dist: {dist_centro:.2f}m")
                     self.last_target_center = alvo['center']
                     erro = center_cam - alvo['center'][0]
                     rotacao = -0.003 * erro
@@ -191,25 +242,19 @@ class YouBotController:
                     else: vel_frente = 0.15 
 
                 elif dist_centro < 0.6:
-                    print(f"   [APP] Modo Cego (Perto: {dist_centro:.2f}m).")
                     vel_frente = 0.15 
                     rotacao = 0.0
                 else:
-                    print("--> [PERDA] Perdi alvo longe. Reiniciando.")
                     self.state = "SEARCH_RADAR"
                     vel_frente = 0.0
 
                 self.base.move(vel_frente, 0.0, rotacao)
 
-            # ---------------------------------------------------------
             # 4. GRAB
-            # ---------------------------------------------------------
             elif self.state == "GRAB":
                 self.base.reset()
                 self.grab_timer += 1
                 
-                if self.grab_timer == 1: print("--> [GRAB] Iniciando sequência de pega.")
-
                 if self.grab_timer == 20: 
                     self.gripper.release()
                     self.arm.set_height(Arm.FRONT_FLOOR)
@@ -218,17 +263,8 @@ class YouBotController:
                 elif self.grab_timer == 150: 
                     self.arm.set_height(Arm.FRONT_PLATE)
                 elif self.grab_timer > 220:
-                    print("--> [SUCESSO] Peguei! Voltando a buscar.")
+                    print("--> [SUCESSO] Próximo.")
                     self.target_cube_label = None 
-                    self.state = "SEARCH_RADAR"
-
-            # ---------------------------------------------------------
-            # AVOID
-            # ---------------------------------------------------------
-            elif self.state == "AVOID":
-                self.base.move(0.0, 0.0, -self.turn_speed)
-                self.avoid_timer += 1
-                if self.avoid_timer > 30:
                     self.state = "SEARCH_RADAR"
 
 if __name__ == "__main__":

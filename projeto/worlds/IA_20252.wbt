@@ -121,7 +121,7 @@ Youbot {
       translation 0.28 0 0
       name "lidar2"
       horizontalResolution 667
-      fieldOfView 3.5
+      fieldOfView 2
       numberOfLayers 1
       minRange 0.05
       maxRange 2.5
@@ -129,7 +129,7 @@ Youbot {
     Lidar {
       translation 0.28 0 -0.085
       horizontalResolution 667
-      fieldOfView 3.5
+      fieldOfView 2
       numberOfLayers 1
       minRange 0.05
       maxRange 2.5
