@@ -19,7 +19,7 @@ class Perception:
 
         self.last_time = 0.0
         # Vamos testar mais lento (0.5s) para garantir processamento
-        self.interval = 0.5
+        self.interval = 0.2
         self.last_detections = []
 
         # IMPORTANTE: Definimos os nomes manualmente caso o ONNX tenha perdido essa info

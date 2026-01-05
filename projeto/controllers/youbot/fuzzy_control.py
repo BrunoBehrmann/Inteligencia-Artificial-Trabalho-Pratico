@@ -1,124 +1,129 @@
 import numpy as np
 
 
-class FuzzyController:
+class FuzzyControl:
     def __init__(self):
-        # --- DEFINIÇÃO DOS UNIVERSOS ---
-        # Resolução para o cálculo do centroide (quanto maior, mais preciso e mais lento)
-        self.res = 100
+        # Universos
+        self.e_max = 320.0   # erro em pixels (metade da largura 640)
+        self.d_max = 1.5     # distância em metros
 
-        # Ranges das saídas (Consequentes)
-        self.v_range = np.linspace(0, 0.6, self.res)      # Velocidade Linear
-        self.w_range = np.linspace(-1.5, 1.5, self.res)   # Velocidade Angular
-
-    # --- FUNÇÕES DE PERTINÊNCIA (Shapes) ---
-    def trimf(self, x, abc):
-        """Triangular membership function"""
-        a, b, c = abc
-        return np.maximum(0, np.minimum((x - a) / (b - a + 1e-9), (c - x) / (c - b + 1e-9)))
-
-    def trapmf(self, x, abcd):
-        """Trapezoidal membership function"""
-        a, b, c, d = abcd
-        return np.maximum(0, np.minimum(np.minimum((x - a) / (b - a + 1e-9), 1), (d - x) / (d - c + 1e-9)))
-
-    def compute(self, direcao_val, risco_val):
-        """
-        Entradas: 
-            direcao_val: radianos [-1.6 a 1.6]
-            risco_val:   normalizado [0 a 1]
-        Saídas:
-            v (linear), w (angular)
-        """
-
-        # --- 1. FUZZIFICAÇÃO (Calcula o grau de cada termo) ---
-
-        # Risco [0..1]
-        risco_baixo = self.trapmf(risco_val, [0, 0, 0.2, 0.45])
-        risco_medio = self.trimf(risco_val,  [0.3, 0.5, 0.7])
-        risco_alto = self.trapmf(risco_val, [0.55, 0.8, 1.0, 1.0])
-
-        # Direção [-1.6..1.6]
-        # Ajustei levemente os ranges para cobrir buracos
-        dir_esq = self.trimf(direcao_val, [-2.0, -1.6, -0.3])
-        dir_centro = self.trimf(direcao_val, [-0.6, 0.0, 0.6])
-        dir_dir = self.trimf(direcao_val, [0.3, 1.6, 2.0])
-
-        # --- 2. INFERÊNCIA (Aplicar Regras) ---
-        # O "grau de ativação" da regra é o MÍNIMO entre as entradas (E lógico)
-
-        # R1: Risco Baixo + Esq -> V Alta, W Esq Suave
-        r1 = min(risco_baixo, dir_esq)
-        # R2: Risco Baixo + Centro -> V Alta, W Zero
-        r2 = min(risco_baixo, dir_centro)
-        # R3: Risco Baixo + Dir -> V Alta, W Dir Suave
-        r3 = min(risco_baixo, dir_dir)
-
-        # R4: Risco Medio + Esq -> V Media, W Esq Medio
-        r4 = min(risco_medio, dir_esq)
-        # R5: Risco Medio + Centro -> V Media, W Zero
-        r5 = min(risco_medio, dir_centro)
-        # R6: Risco Medio + Dir -> V Media, W Dir Medio
-        r6 = min(risco_medio, dir_dir)
-
-        # R7: Risco Alto + Esq -> V Baixa, W Esq Brusco
-        r7 = min(risco_alto, dir_esq)
-        # R8: Risco Alto + Centro -> V Baixa, W Zero
-        r8 = min(risco_alto, dir_centro)
-        # R9: Risco Alto + Dir -> V Baixa, W Dir Brusco
-        r9 = min(risco_alto, dir_dir)
-
-        # --- 3. AGREGAÇÃO E DEFUZZIFICAÇÃO (V - Linear) ---
-        # Define os shapes de saída para V
-        v_baixa_shape = self.trapmf(self.v_range, [0, 0, 0.1, 0.25])
-        v_media_shape = self.trimf(self.v_range,  [0.15, 0.35, 0.55])
-        v_alta_shape = self.trapmf(self.v_range, [0.45, 0.55, 0.6, 0.6])
-
-        # Corta os shapes pelo grau de ativação (Corte Mamdani)
-        # Regras que ativam Baixa: R7, R8, R9
-        out_v_baixa = np.minimum(max(r7, r8, r9), v_baixa_shape)
-        # Regras que ativam Media: R4, R5, R6
-        out_v_media = np.minimum(max(r4, r5, r6), v_media_shape)
-        # Regras que ativam Alta: R1, R2, R3
-        out_v_alta = np.minimum(max(r1, r2, r3), v_alta_shape)
-
-        # Une tudo (Máximo da agregação)
-        agg_v = np.maximum(out_v_baixa, np.maximum(out_v_media, out_v_alta))
-
-        # Centroide V
-        denom_v = np.sum(agg_v)
-        if denom_v == 0:
-            final_v = 0.0
+    # ---------------- Função Triangular ----------------
+    def tri(self, x, a, b, c):
+        if x <= a or x >= c:
+            return 0.0
+        elif x == b:
+            return 1.0
+        elif x < b:
+            return (x - a) / ((b - a) + 1e-6)
         else:
-            final_v = np.sum(agg_v * self.v_range) / denom_v
+            return (c - x) / ((c - b) + 1e-6)
 
-        # --- 4. AGREGAÇÃO E DEFUZZIFICAÇÃO (W - Angular) ---
-        # Define os shapes de saída para W
-        w_esq_brusco = self.trapmf(self.w_range, [-1.5, -1.5, -1.1, -0.8])
-        w_esq_medio = self.trimf(self.w_range,  [-1.0, -0.7, -0.4])
-        w_esq_suave = self.trimf(self.w_range,  [-0.6, -0.3, 0.1])
-        w_zero = self.trimf(self.w_range,  [-0.2, 0.0, 0.2])
-        w_dir_suave = self.trimf(self.w_range,  [-0.1, 0.3, 0.6])
-        w_dir_medio = self.trimf(self.w_range,  [0.4, 0.7, 1.0])
-        w_dir_brusco = self.trapmf(self.w_range, [0.8, 1.1, 1.5, 1.5])
+    # ---------------- Fuzzificação ----------------
+    def fuzzify_error(self, e):
+        # Ajustei o Zero (Z) para ser um pouco mais largo (-50 a 50)
+        # para evitar que ele fique dançando esquerda/direita no final.
+        return {
+            "NB": self.tri(e, -self.e_max, -self.e_max, -100),  # Negative Big
+            "NS": self.tri(e, -150, -80, 0),                  # Negative Small
+            "Z":  self.tri(e, -50, 0, 50),                    # Zero (Alinhado)
+            "PS": self.tri(e, 0, 80, 150),                    # Positive Small
+            "PB": self.tri(e, 100, self.e_max, self.e_max),   # Positive Big
+        }
 
-        # Corta e Agrega
-        out_w_eb = np.minimum(r7, w_esq_brusco)
-        out_w_em = np.minimum(r4, w_esq_medio)
-        out_w_es = np.minimum(r1, w_esq_suave)
-        out_w_ze = np.minimum(max(r2, r5, r8), w_zero)
-        out_w_ds = np.minimum(r3, w_dir_suave)
-        out_w_dm = np.minimum(r6, w_dir_medio)
-        out_w_db = np.minimum(r9, w_dir_brusco)
+    def fuzzify_dist(self, d):
+        return {
+            "MP": self.tri(d, 0.0, 0.0, 0.2),  # Muito Perto
+            "P":  self.tri(d, 0.1, 0.3, 0.6),  # Perto
+            "M":  self.tri(d, 0.4, 0.8, 1.2),  # Médio
+            "L":  self.tri(d, 1.0, self.d_max, self.d_max),  # Longe
+        }
 
-        agg_w = np.maximum.reduce(
-            [out_w_eb, out_w_em, out_w_es, out_w_ze, out_w_ds, out_w_dm, out_w_db])
+    # ---------------- Regras ----------------
+    def rules(self, mu_e, mu_d):
+        # Variáveis auxiliares
+        # Se erro for grande, está virando
+        virando = max(mu_e["NB"], mu_e["PB"])
+        alinhado = mu_e["Z"]
 
-        # Centroide W
-        denom_w = np.sum(agg_w)
-        if denom_w == 0:
-            final_w = 0.0
-        else:
-            final_w = np.sum(agg_w * self.w_range) / denom_w
+        # Regras de Velocidade Linear (V)
+        # Se estiver virando muito, reduz a velocidade
+        v_rules = {
+            "Z": mu_d["MP"],                         # Para se muito perto
+            # Devagar se perto OU virando
+            "S": max(mu_d["P"], virando),
+            # Médio se médio E alinhado
+            "M": min(mu_d["M"], alinhado),
+            # Rápido se longe E alinhado
+            "F": min(mu_d["L"], alinhado),
+        }
 
-        return final_v, final_w
+        # Regras de Rotação (W) - Foca puramente no erro
+        w_rules = {
+            "LB": mu_e["PB"],  # Erro Positivo -> Vira Esquerda
+            "LS": mu_e["PS"],
+            "Z":  mu_e["Z"],
+            "RS": mu_e["NS"],
+            "RB": mu_e["NB"],  # Erro Negativo -> Vira Direita
+        }
+
+        return v_rules, w_rules
+
+    # ---------------- Fuzzificação de Saída ----------------
+    def fuzzify_v(self, v):
+        return {
+            "Z": self.tri(v, 0.0, 0.0, 0.1),
+            "S": self.tri(v, 0.05, 0.3, 0.5),
+            "M": self.tri(v, 0.4, 0.7, 0.9),
+            "F": self.tri(v, 0.8, 1.0, 1.0),
+        }
+
+    def fuzzify_w(self, w):
+        return {
+            "LB": self.tri(w, -1.0, -1.0, -0.5),
+            "LS": self.tri(w, -0.6, -0.3, 0.0),
+            "Z":  self.tri(w, -0.1, 0.0, 0.1),
+            "RS": self.tri(w, 0.0, 0.3, 0.6),
+            "RB": self.tri(w, 0.5, 1.0, 1.0),
+        }
+
+    # ---------------- Defuzzificação (Centroide) ----------------
+    def defuzzify_v(self, mu_out):
+        xs = np.linspace(0.0, 1.0, 50)
+        num, den = 0.0, 0.0
+        for x in xs:
+            mu_sets = self.fuzzify_v(x)
+            # Método Mamdani (Máximo dos Mínimos)
+            mu = max(
+                min(mu_out["Z"], mu_sets["Z"]),
+                min(mu_out["S"], mu_sets["S"]),
+                min(mu_out["M"], mu_sets["M"]),
+                min(mu_out["F"], mu_sets["F"]),
+            )
+            num += x * mu
+            den += mu
+        return num / den if den > 0 else 0.0
+
+    def defuzzify_w(self, mu_out):
+        xs = np.linspace(-1.0, 1.0, 50)
+        num, den = 0.0, 0.0
+        for x in xs:
+            mu_sets = self.fuzzify_w(x)
+            mu = max(
+                min(mu_out["LB"], mu_sets["LB"]),
+                min(mu_out["LS"], mu_sets["LS"]),
+                min(mu_out["Z"],  mu_sets["Z"]),
+                min(mu_out["RS"], mu_sets["RS"]),
+                min(mu_out["RB"], mu_sets["RB"]),
+            )
+            num += x * mu
+            den += mu
+        return num / den if den > 0 else 0.0
+
+    # ---------------- Compute Principal ----------------
+    def compute(self, erro_px, dist):
+        mu_e = self.fuzzify_error(erro_px)
+        mu_d = self.fuzzify_dist(dist)
+        mu_v, mu_w = self.rules(mu_e, mu_d)
+        v = self.defuzzify_v(mu_v)
+        w = self.defuzzify_w(mu_w)
+        return v, w
