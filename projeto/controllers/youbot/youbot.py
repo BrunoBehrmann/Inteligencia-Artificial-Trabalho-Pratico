@@ -5,9 +5,9 @@ from gripper import Gripper
 from perception import Perception
 import math
 
+
 class YouBotController:
     def __init__(self):
-        # --- INICIALIZAÇÃO ---
         self.robot = Robot()
         self.time_step = int(self.robot.getBasicTimeStep())
 
@@ -15,257 +15,232 @@ class YouBotController:
         self.arm = Arm(self.robot)
         self.gripper = Gripper(self.robot)
 
-        # --- VISÃO ---
         self.camera = self.robot.getDevice("camera")
         self.camera.enable(self.time_step)
         self.cam_width = self.camera.getWidth()
-        
-        self.perception = Perception(self.camera, "best.pt")
-        self.perception.interval = 0.05  
 
-        # --- LIDARS ---
+        self.perception = Perception(self.camera, "best.pt")
+        self.perception.interval = 0.05
+
         self.lidar_front = self.robot.getDevice("lidar")
         self.lidar_front.enable(self.time_step)
-        self.lidar_front.enablePointCloud()
         self.lidar_width = self.lidar_front.getHorizontalResolution()
-        self.lidar_fov = self.lidar_front.getFov()
 
-        self.lidar_top = self.robot.getDevice("lidar2") 
-        self.lidar_top.enable(self.time_step)
-        self.lidar_top.enablePointCloud()
+        # FSM
+        self.state = "SEARCH_CUBE"
+        self.last_state = None
 
-        # --- ESTADOS ---
-        self.state = "SEARCH_RADAR" 
-        self.prev_state = "SEARCH_RADAR"
-        
-        self.target_cube_label = None 
-        self.last_target_center = None 
-        
-        self.state_timer = 0
-        self.grab_timer = 0
-        self.avoid_timer = 0
-        self.drift_command = (0, 0, 0)
-        
-        # --- PARÂMETROS ---
-        self.turn_speed = 0.5 
-        self.distancia_ideal_pegar = 0.11
+        self.target_cube_label = None
+        self.target_box_label = None
+        self.cube_color = None
 
-    # --- ESQUIVA ---
-    def checar_perigo_com_drift(self):
-        range_front = self.lidar_front.getRangeImage()
-        if not range_front: return False, (0,0,0)
+        self.collected_cubes = 0
+        self.max_cubes = 15
 
-        limit_perigo = 0.2 
-        
-        setor_dir   = range_front[0:150]
-        setor_frente= range_front[150:360]
-        setor_esq   = range_front[360:]
+        self.turn_speed = 0.6
+        self.distancia_parar = 0.12
 
-        def min_safe(vals):
-            validos = [x for x in vals if x > 0.04]
-            return min(validos) if validos else 99.0
+    # ================== UTIL ==================
 
-        d_dir = min_safe(setor_dir)
-        d_frente = min_safe(setor_frente)
-        d_esq = min_safe(setor_esq)
+    def on_state_enter(self, state_name):
+        if self.last_state != state_name:
+            print(f"\n=== ESTADO: {state_name} ===")
+            self.last_state = state_name
 
-        if d_frente < limit_perigo:
-            # print(f"--> [PERIGO] Frente bloqueada ({d_frente:.2f}m)! Driftando...")
-            if d_esq > d_dir: return True, (-0.1, 0.5, -0.2) 
-            else: return True, (-0.1, -0.5, 0.2)
+    def print_distance(self, label, dist):
+        if dist < 99:
+            print(f"[LIDAR] Distância até {label}: {dist:.3f} m")
 
-        elif d_esq < limit_perigo:
-            return True, (0.0, -0.4, 0.0)
+    def find_objects(self, detections, labels):
+        objs = [d for d in detections if d["label"] in labels]
+        return max(objs, key=lambda o: o["bbox"][3]) if objs else None
 
-        elif d_dir < limit_perigo:
-            return True, (0.0, 0.4, 0.0)
+    def box_from_cube(self, cube_label):
+        if "azul" in cube_label:
+            return "caixa azul"
+        if "vermelho" in cube_label:
+            return "caixa vermelha"
+        if "verde" in cube_label:
+            return "caixa verde"
+        return None
 
-        return False, (0,0,0)
+    # ================== FUZZY ==================
 
-    def obter_erro_angular_lidar(self):
-        range_front = self.lidar_front.getRangeImage()
-        range_top = self.lidar_top.getRangeImage()
-        if not range_front: return None, 99.0
+    def fuzzy_velocidade(self, d):
+        if d < 0.12:
+            return 0.0
+        elif d < 0.25:
+            return 0.08
+        elif d < 0.5:
+            return 0.2
+        else:
+            return 0.35
 
-        melhor_distancia = 999.0
-        melhor_indice = -1
+    def fuzzy_rotacao(self, erro_px):
+        if abs(erro_px) < 15:
+            return 0.0
+        return -0.003 * erro_px
 
-        for i in range(self.lidar_width):
-            d_baixo = range_front[i]
-            d_cima = range_top[i]
-            if d_baixo > 1.2 or d_baixo < 0.05: continue
-            
-            eh_cubo = (d_baixo < 2.0) and (d_cima == float('inf') or (d_cima > d_baixo + 0.15))
-
-            if eh_cubo:
-                if d_baixo < melhor_distancia:
-                    melhor_distancia = d_baixo
-                    melhor_indice = i
-
-        if melhor_indice != -1:
-            center_index = self.lidar_width / 2
-            erro_index = (melhor_indice - center_index)
-            angulo_erro = (erro_index / self.lidar_width) * self.lidar_fov
-            return -angulo_erro, melhor_distancia
-        return None, 99.0
+    # ================== LIDAR ==================
 
     def get_lidar_center_dist(self):
-        range_front = self.lidar_front.getRangeImage()
-        if not range_front: return 99.0
+        ranges = self.lidar_front.getRangeImage()
+        if not ranges:
+            return 99.0
         mid = int(self.lidar_width / 2)
-        vals = [x for x in range_front[mid-20 : mid+20] if 0.04 < x < 2.0]
+        vals = [x for x in ranges[mid - 10:mid + 10] if 0.05 < x < 2.0]
         return min(vals) if vals else 99.0
 
+    # ================== LOOP ==================
+
     def run(self):
-        print("=== YOUBOT: BUSCA REFORÇADA (IGNORA PAREDES) ===")
-        center_cam = self.camera.getWidth() / 2
+        print("=== YOUBOT FSM CONTROLLER ===")
+
         self.arm.reset()
         self.gripper.release()
 
+        center_cam = self.cam_width / 2
+
         while self.robot.step(self.time_step) != -1:
-            img, detections = self.perception.get_detections()
-            dist_centro = self.get_lidar_center_dist()
+            _, detections = self.perception.get_detections()
+            dist = self.get_lidar_center_dist()
 
-            # --- PROTEÇÃO ---
-            modo_seguro = self.state not in ["APPROACH", "GRAB", "IGNORING"]
-            
-            if self.state != "DRIFT_EVASION" and modo_seguro:
-                perigo, comando_drift = self.checar_perigo_com_drift()
-                if perigo:
-                    self.prev_state = self.state 
-                    self.state = "DRIFT_EVASION"
-                    self.drift_command = comando_drift
-                    self.avoid_timer = 0
-                    
-            # --- MÁQUINA DE ESTADOS ---
+            # ================= SEARCH CUBE =================
+            if self.state == "SEARCH_CUBE":
+                self.on_state_enter("SEARCH_CUBE")
 
-            if self.state == "DRIFT_EVASION":
-                vx, vy, rot = self.drift_command
-                self.base.move(vx, vy, rot)
-                self.avoid_timer += 1
-                if self.avoid_timer > 15:
-                    self.base.reset() 
-                    self.state = "SEARCH_RADAR" 
-                continue
-
-            # ---------------------------------------------------------
-            # ESTADO NOVO: IGNORING (Girar cego para sair do obstáculo)
-            # ---------------------------------------------------------
-            if self.state == "IGNORING":
-                self.base.move(0.0, 0.0, -self.turn_speed) # Gira cego
-                self.avoid_timer += 1
-                # Gira por 30 steps (aprox 1 segundo) para garantir que mudou o alvo
-                if self.avoid_timer > 30:
-                    self.state = "SEARCH_RADAR"
-                continue
-
-            # 1. SEARCH_RADAR
-            if self.state == "SEARCH_RADAR":
-                erro_ang, dist_obj = self.obter_erro_angular_lidar()
-
-                if erro_ang is not None:
-                    if dist_obj < 0.40: 
-                        print(f"--> [RADAR] Candidato a {dist_obj:.2f}m. Verificando...")
-                        self.base.reset()
-                        self.state = "IDENTIFY_COLOR"
-                        self.state_timer = 0
-                        continue
-
-                    if abs(erro_ang) < 0.05:
-                        self.base.reset()
-                        self.state = "IDENTIFY_COLOR"
-                        self.state_timer = 0
-                    else:
-                        rot = erro_ang * 0.8
-                        rot = max(min(rot, 0.6), -0.6)
-                        self.base.move(0.0, 0.0, rot)
-                else:
-                    self.base.move(0.0, 0.0, -self.turn_speed)
-
-            # 2. IDENTIFY_COLOR (Lógica corrigida)
-            elif self.state == "IDENTIFY_COLOR":
-                self.base.reset()
-                self.state_timer += 1
-                if self.state_timer < 5: continue 
-
-                melhor_candidato = None
-                
-                # Filtra APENAS o que é cubo. Se for obstáculo, a lista fica vazia.
-                if detections:
-                    cubos = [d for d in detections if 'cubo' in d['label'] or 'cube' in d['label']]
-                    if cubos:
-                        melhor_candidato = max(cubos, key=lambda c: c['bbox'][3])
-
-                if melhor_candidato:
-                    self.target_cube_label = melhor_candidato['label']
-                    self.last_target_center = melhor_candidato['center']
-                    print(f"--> [VISÃO] Confirmado: {self.target_cube_label}.")
-                    self.state = "APPROACH"
-                else:
-                    # Se não é cubo, é LIXO (parede, obstáculo).
-                    
-                    # Checagem de segurança para "ponto cego" (cubo colado na câmera)
-                    # Só arrisca pegar se não tiver detectado NENHUM obstáculo explicitamente
-                    tem_obstaculo = any('obstaculo' in d['label'] for d in detections)
-                    
-                    if dist_centro < 0.2 and not tem_obstaculo:
-                        print("Perto demais e sem obstáculo visível. Arriscando pegar.")
-                        self.state = "GRAB" 
-                    else:
-                        print("--> [IGNORAR] Vi algo mas não é cubo. Girando para ignorar.")
-                        self.state = "IGNORING" # Vai girar cego para sair do loop
-                        self.avoid_timer = 0
-
-            # 3. APPROACH
-            elif self.state == "APPROACH":
-                candidatos = [d for d in detections if d['label'] == self.target_cube_label]
-                alvo = None
-                if candidatos:
-                    alvo = max(candidatos, key=lambda c: c['bbox'][3])
-
-                if dist_centro <= self.distancia_ideal_pegar:
-                    print("--> [NAV] Cheguei.")
+                if self.collected_cubes >= self.max_cubes:
+                    print("🎉 MISSÃO CONCLUÍDA!")
                     self.base.reset()
-                    self.state = "GRAB"
-                    self.grab_timer = 0
-                    continue
+                    break
 
-                vel_frente = 0.0
-                rotacao = 0.0
+                alvo = self.find_objects(
+                    detections,
+                    ["cubo_azul", "cubo_vermelho", "cubo_verde"]
+                )
 
                 if alvo:
-                    self.last_target_center = alvo['center']
-                    erro = center_cam - alvo['center'][0]
-                    rotacao = -0.003 * erro
-                    
-                    if dist_centro > 0.3: vel_frente = 0.4
-                    else: vel_frente = 0.15 
-
-                elif dist_centro < 0.6:
-                    vel_frente = 0.15 
-                    rotacao = 0.0
+                    self.target_cube_label = alvo["label"]
+                    self.cube_color = alvo["label"]
+                    print(f"[VISÃO] Cubo detectado: {self.target_cube_label}")
+                    self.state = "APPROACH_CUBE"
                 else:
-                    self.state = "SEARCH_RADAR"
-                    vel_frente = 0.0
+                    self.base.move(0, 0, -self.turn_speed)
 
-                self.base.move(vel_frente, 0.0, rotacao)
+            # ================= APPROACH CUBE =================
+            elif self.state == "APPROACH_CUBE":
+                self.on_state_enter("APPROACH_CUBE")
 
-            # 4. GRAB
-            elif self.state == "GRAB":
+                alvo = self.find_objects(detections, [self.target_cube_label])
+
+                if not alvo:
+                    print("[NAV] Cubo perdido → SEARCH_CUBE")
+                    self.state = "SEARCH_CUBE"
+                    continue
+
+                self.print_distance(self.target_cube_label, dist)
+
+                erro_px = center_cam - alvo["center"][0]
+                vel = self.fuzzy_velocidade(dist)
+                rot = self.fuzzy_rotacao(erro_px)
+
+                if dist <= self.distancia_parar:
+                    print("[NAV] Cheguei ao cubo")
+                    self.base.reset()
+                    self.grab_timer = 0
+                    self.state = "GRAB_CUBE"
+                    continue
+
+                self.base.move(vel, 0.0, rot)
+
+            # ================= GRAB CUBE =================
+            elif self.state == "GRAB_CUBE":
+                self.on_state_enter("GRAB_CUBE")
+
                 self.base.reset()
                 self.grab_timer += 1
-                
-                if self.grab_timer == 20: 
+
+                if self.grab_timer == 20:
+                    print("[GRAB] Abrindo garra")
                     self.gripper.release()
                     self.arm.set_height(Arm.FRONT_FLOOR)
-                elif self.grab_timer == 100: 
+
+                elif self.grab_timer == 80:
+                    print("[GRAB] Fechando garra")
                     self.gripper.grip()
-                elif self.grab_timer == 150: 
+
+                elif self.grab_timer == 130:
+                    print("[GRAB] Elevando cubo (posição segura)")
                     self.arm.set_height(Arm.FRONT_PLATE)
-                elif self.grab_timer > 220:
-                    print("--> [SUCESSO] Próximo.")
-                    self.target_cube_label = None 
-                    self.state = "SEARCH_RADAR"
+
+                elif self.grab_timer > 200:
+                    self.target_box_label = self.box_from_cube(self.cube_color)
+                    print(f"[OK] Cubo preso → buscar {self.target_box_label}")
+                    self.state = "SEARCH_BOX"
+
+            # ================= SEARCH BOX =================
+            elif self.state == "SEARCH_BOX":
+                self.on_state_enter("SEARCH_BOX")
+
+                alvo = self.find_objects(detections, [self.target_box_label])
+
+                if alvo:
+                    print(f"[VISÃO] Caixa detectada: {self.target_box_label}")
+                    self.state = "APPROACH_BOX"
+                else:
+                    self.base.move(0, 0, -self.turn_speed)
+
+            # ================= APPROACH BOX =================
+            elif self.state == "APPROACH_BOX":
+                self.on_state_enter("APPROACH_BOX")
+
+                alvo = self.find_objects(detections, [self.target_box_label])
+
+                if not alvo:
+                    print("[NAV] Caixa perdida → SEARCH_BOX")
+                    self.state = "SEARCH_BOX"
+                    continue
+
+                self.print_distance(self.target_box_label, dist)
+
+                erro_px = center_cam - alvo["center"][0]
+                vel = self.fuzzy_velocidade(dist)
+                rot = self.fuzzy_rotacao(erro_px)
+
+                if dist <= self.distancia_parar:
+                    print("[NAV] Cheguei à caixa")
+                    self.base.reset()
+                    self.drop_timer = 0
+                    self.state = "DROP_CUBE"
+                    continue
+
+                self.base.move(vel, 0.0, rot)
+
+            # ================= DROP CUBE =================
+            elif self.state == "DROP_CUBE":
+                self.on_state_enter("DROP_CUBE")
+
+                self.drop_timer += 1
+
+                if self.drop_timer == 20:
+                    print("[DROP] Baixando braço")
+                    self.arm.set_height(Arm.FRONT_FLOOR)
+
+                elif self.drop_timer == 60:
+                    print("[DROP] Soltando cubo")
+                    self.gripper.release()
+
+                elif self.drop_timer > 100:
+                    self.collected_cubes += 1
+                    print(
+                        f"[SUCESSO] Cubo depositado | Total: {self.collected_cubes}"
+                    )
+
+                    self.target_cube_label = None
+                    self.target_box_label = None
+                    self.cube_color = None
+                    self.state = "SEARCH_CUBE"
+
 
 if __name__ == "__main__":
     controller = YouBotController()
