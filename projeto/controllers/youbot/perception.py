@@ -1,44 +1,50 @@
-import cv2
 import numpy as np
 import time
 from ultralytics import YOLO
 
 
 class Perception:
-    def __init__(self, camera, model_path="best.pt"):
+    def __init__(self, camera, lidar=None, model_path="best.pt"):
         self.camera = camera
-        print(f"[PERCEPTION] Carregando modelo de: {model_path}")
+        self.lidar = lidar
 
-        # Tenta carregar o modelo. Se falhar, avisa o erro.
+        print(f"[PERCEPTION] Carregando modelo {model_path}")
         try:
-            self.model = YOLO(model_path, task='detect')
-            print("[PERCEPTION] Modelo carregado com sucesso!")
+            self.model = YOLO(model_path)
+            print("[PERCEPTION] Modelo carregado.")
         except Exception as e:
-            print(f"[ERRO] Falha ao carregar best.pt: {e}")
+            print(f"[ERRO] {e}")
             self.model = None
 
         self.last_time = 0.0
-        # Vamos testar mais lento (0.5s) para garantir processamento
-        self.interval = 0.5
+        self.interval = 0.2
         self.last_detections = []
 
-        # IMPORTANTE: Definimos os nomes manualmente caso o ONNX tenha perdido essa info
-        # A ordem deve ser EXATAMENTE a do seu data.yaml
         self.class_names = {
-            0: 'obstáculo',
-            1: 'cubo azul',
-            2: 'cubo vermelho',
-            3: 'cubo verde',
-            4: 'caixa azul',
-            5: 'caixa vermelha',
+            0: 'obstaculo',
+            1: 'cubo_azul',
+            2: 'cubo_vermelho',
+            3: 'cubo_verde',
+            4: 'caixa_azul',
+            5: 'caixa_vermelha',
             6: 'caixa_verde'
         }
 
-        # Variável para salvar apenas a primeira foto (diagnóstico)
-        self.debug_image_saved = False
+    def get_lidar_dist(self):
+        if not self.lidar:
+            return 2.0
+
+        scan = self.lidar.getRangeImage()
+        if not scan:
+            return 2.0
+
+        center = len(scan) // 2
+        window = scan[center - 10:center + 10]
+        valid = [r for r in window if 0.05 < r < 3.0]
+
+        return sum(valid) / len(valid) if valid else 2.0
 
     def get_detections(self):
-        # Se o modelo não carregou, retorna vazio
         if self.model is None:
             return None, []
 
@@ -48,58 +54,25 @@ class Perception:
 
         self.last_time = now
 
-        # 1. Pega imagem bruta do Webots
         raw = self.camera.getImage()
         if raw is None:
-            print(
-                "[ALERTA] Câmera retornou vazio (None). Verifique se enable() foi chamado.")
             return None, []
 
-        w = self.camera.getWidth()
-        h = self.camera.getHeight()
+        w, h = self.camera.getWidth(), self.camera.getHeight()
+        frame = np.frombuffer(raw, np.uint8).reshape((h, w, 4))[:, :, :3]
 
-        # 2. Converte para formato OpenCV (BGR)
-        # Webots: BGRA -> Removemos o Alpha -> BGR
-        frame = np.frombuffer(raw, np.uint8).reshape((h, w, 4))
-        frame = frame[:, :, :3]
-
-        # 3. DEBUG: Salva a primeira imagem que o robô ver para você conferir
-        if not self.debug_image_saved:
-            cv2.imwrite("visao_robo_debug.jpg", frame)
-            print("[DEBUG] Foto 'visao_robo_debug.jpg' salva na pasta do projeto.")
-            print(
-                "[DEBUG] Verifique se essa foto está com as cores certas e não está preta!")
-            self.debug_image_saved = True
-
-        # 4. Inferência
-        # Baixamos a confiança para 0.1 (10%) para ver se ele detecta ALGO
-        results = self.model(frame, conf=0.8, verbose=False)[0]
+        results = self.model(frame, conf=0.6, verbose=False)[0]
 
         detections = []
-
-        # Verifica se achou alguma coisa
-        if len(results.boxes) > 0:
-            print(f"[DETECÇÃO] Encontrei {len(results.boxes)} objetos!")
-
         for box in results.boxes:
             cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
+            label = self.model.names.get(cls_id, self.class_names.get(cls_id))
             x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-            # Pega o nome da nossa lista manual ou do modelo se disponível
-            if hasattr(self.model, 'names') and cls_id in self.model.names:
-                label = self.model.names[cls_id]
-            else:
-                label = self.class_names.get(cls_id, f"Desconhecido_{cls_id}")
-
-            print(f"   -> Objeto: {label} | Confiança: {conf:.2f}")
 
             detections.append({
                 "label": label,
-                "conf": conf,
+                "conf": float(box.conf[0]),
                 "bbox": (x1, y1, x2, y2),
-                "center": ((x1 + x2) / 2, (y1 + y2) / 2),
-                "size": (x2 - x1, y2 - y1)
             })
 
         self.last_detections = detections
