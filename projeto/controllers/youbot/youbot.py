@@ -41,7 +41,7 @@ class YouBotController:
         self.turn_speed = 0.5
 
         # Distâncias de parada diferentes
-        self.distancia_parar_cubo = 0.12
+        self.distancia_parar_cubo = 0.11
         self.distancia_parar_caixa = 0.30  # Caixa precisa de mais espaço
 
         self.VEL_MAX = 0.5
