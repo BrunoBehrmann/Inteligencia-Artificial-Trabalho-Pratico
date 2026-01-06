@@ -102,7 +102,7 @@ class Arm:
             height: height preset from ArmHeight class
         """
         if height == ArmHeight.FRONT_FLOOR:
-            self.motors[1].setPosition(-0.95)
+            self.motors[1].setPosition(-0.949)
             self.motors[2].setPosition(-1.55)
             self.motors[3].setPosition(-0.61)
             self.motors[4].setPosition(0.0)

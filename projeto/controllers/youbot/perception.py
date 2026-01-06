@@ -73,13 +73,13 @@ class Perception:
 
         # 4. Inferência
         # Baixamos a confiança para 0.1 (10%) para ver se ele detecta ALGO
-        results = self.model(frame, conf=0.8, verbose=False)[0]
+        results = self.model(frame, conf=0.7, verbose=False)[0]
 
         detections = []
 
         # Verifica se achou alguma coisa
-        if len(results.boxes) > 0:
-            print(f"[DETECÇÃO] Encontrei {len(results.boxes)} objetos!")
+       #if len(results.boxes) > 0:
+       #     print(f"[DETECÇÃO] Encontrei {len(results.boxes)} objetos!")
 
         for box in results.boxes:
             cls_id = int(box.cls[0])
@@ -92,7 +92,7 @@ class Perception:
             else:
                 label = self.class_names.get(cls_id, f"Desconhecido_{cls_id}")
 
-            print(f"   -> Objeto: {label} | Confiança: {conf:.2f}")
+            #print(f"   -> Objeto: {label} | Confiança: {conf:.2f}")
 
             detections.append({
                 "label": label,
