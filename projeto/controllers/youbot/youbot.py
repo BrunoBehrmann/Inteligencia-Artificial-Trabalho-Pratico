@@ -9,10 +9,7 @@ from fuzzy_control import FuzzyControl
 class YouBotController:
     def __init__(self):
         self.robot = Robot()
-        # --- CORREÇÃO: Definir time_step antes de usar ---
         self.time_step = int(self.robot.getBasicTimeStep())
-        
-        # Cálculo correto dos steps para 2 segundos
         self.steps_para_2s = int(2000 / self.time_step)
 
         self.base = Base(self.robot)
@@ -30,38 +27,35 @@ class YouBotController:
         self.lidar_front.enable(self.time_step)
         self.lidar_width = self.lidar_front.getHorizontalResolution()
 
-        # --- SENSORES ---
+        self.lidar2 = self.robot.getDevice("lidar2")
+        if self.lidar2:
+            self.lidar2.enable(self.time_step)
+            self.lidar2_width = self.lidar2.getHorizontalResolution()
+        else:
+            print("AVISO: 'lidar2' não encontrado!")
+            self.lidar2_width = 0
+
         self.ds_left = self.robot.getDevice("sensor_esquerda")
         self.ds_left.enable(self.time_step)
-        
         self.ds_right = self.robot.getDevice("sensor_direita")
         self.ds_right.enable(self.time_step)
 
-        # Configurações de Strafe
         self.limiar_desvio = 0.60
         self.velocidade_strafe = 0.5
-        
-        # Variáveis de Controle do Strafe (Timer)
-        self.strafe_timer = 0
-        self.last_strafe_vy = 0.0
 
         self.fuzzy = FuzzyControl()
 
         self.state = "SEARCH_CUBE"
         self.last_state = None
-
         self.target_cube_label = None
         self.target_box_label = None
         self.cube_color = None
 
         self.collected_cubes = 0
-        self.max_cubes = 15
-
         self.turn_speed = 0.5
 
-        # Distâncias de parada
         self.distancia_parar_cubo = 0.11
-        self.distancia_parar_caixa = 0.20 
+        self.distancia_parar_caixa = 0.16
 
         self.VEL_MAX = 0.5
         self.ROT_MAX = 1.0
@@ -70,6 +64,11 @@ class YouBotController:
         self.grab_timer = 0
         self.drop_timer = 0
         self.backup_timer = 0
+
+        self.box_patience = 0
+        self.last_error_px = 0.0
+
+        self.avoiding = False
 
     def on_state_enter(self, state):
         if self.last_state != state:
@@ -81,178 +80,175 @@ class YouBotController:
         return max(objs, key=lambda o: o["bbox"][3]) if objs else None
 
     def box_from_cube(self, cube_label):
-        if "azul" in cube_label: return "caixa_azul"
-        if "vermelho" in cube_label: return "caixa_vermelha"
-        if "verde" in cube_label: return "caixa_verde"
+        if "azul" in cube_label:
+            return "caixa_azul"
+        if "vermelho" in cube_label:
+            return "caixa_vermelha"
+        if "verde" in cube_label:
+            return "caixa_verde"
         return None
 
     def get_lidar_center_dist(self):
+        if not self.lidar_front:
+            return 99.0
         ranges = self.lidar_front.getRangeImage()
         mid = int(self.lidar_width / 2)
-        vals = [x for x in ranges[mid - 20:mid + 20] if 0.05 < x < 3.0]
+        vals = [x for x in ranges[mid - 10:mid + 10] if 0.05 < x < 3.0]
+        return min(vals) if vals else 99.0
+
+    def get_lidar2_dist(self):
+        if not self.lidar2:
+            return self.get_lidar_center_dist()
+        ranges = self.lidar2.getRangeImage()
+        mid = int(self.lidar2_width / 2)
+        vals = [x for x in ranges[mid - 15:mid + 15] if 0.05 < x < 3.0]
         return min(vals) if vals else 99.0
 
     def run(self):
-        print("=== YOUBOT FSM CONTROLLER START ===")
-
+        print("=== YOUBOT CONTROLLER START ===")
         self.arm.reset()
         self.gripper.release()
-
         center_cam = self.cam_width / 2
 
         while self.robot.step(self.time_step) != -1:
-            self.step_counter += 1
             _, detections = self.perception.get_detections()
-            dist = self.get_lidar_center_dist()
 
-            # ================= SEARCH CUBE =================
+            dist_cubo = self.get_lidar_center_dist()
+            dist_caixa = self.get_lidar2_dist()
+
             if self.state == "SEARCH_CUBE":
                 self.on_state_enter("SEARCH_CUBE")
                 alvo = self.find_objects(
                     detections, ["cubo_azul", "cubo_vermelho", "cubo_verde"])
-
                 if alvo:
                     self.target_cube_label = alvo["label"]
                     self.cube_color = alvo["label"]
-                    print(f"-> Alvo detectado: {self.target_cube_label}")
                     self.state = "APPROACH_CUBE"
                 else:
                     self.base.move(0, 0, -self.turn_speed)
 
-            # ================= APPROACH CUBE =================
             elif self.state == "APPROACH_CUBE":
                 self.on_state_enter("APPROACH_CUBE")
                 alvo = self.find_objects(detections, [self.target_cube_label])
-
                 if not alvo:
-                    print("Perdi o cubo!")
                     self.state = "SEARCH_CUBE"
                     continue
-
                 erro_px = center_cam - alvo["center"][0]
-                v_norm, w_norm = self.fuzzy.compute(erro_px, dist)
+                v_norm, w_norm = self.fuzzy.compute(erro_px, dist_cubo)
                 self.base.move(v_norm * self.VEL_MAX, 0, w_norm * self.ROT_MAX)
-
-                if dist <= self.distancia_parar_cubo:
-                    print(f"Cheguei no cubo! Dist: {dist:.2f}")
+                if dist_cubo <= self.distancia_parar_cubo:
                     self.base.reset()
                     self.grab_timer = 0
                     self.state = "GRAB_CUBE"
 
-            # ================= GRAB CUBE =================
             elif self.state == "GRAB_CUBE":
                 self.on_state_enter("GRAB_CUBE")
                 self.base.reset()
                 self.grab_timer += 1
-
                 if self.grab_timer == 1:
                     self.gripper.release()
                     self.arm.set_height(Arm.FRONT_PLATE)
                 elif self.grab_timer == 40:
-                    self.arm.set_height(Arm.FRONT_FLOOR) 
+                    self.arm.set_height(Arm.FRONT_FLOOR)
                 elif self.grab_timer == 80:
                     self.gripper.grip()
                 elif self.grab_timer == 140:
                     self.arm.set_height(Arm.FRONT_PLATE)
                 elif self.grab_timer > 180:
                     self.target_box_label = self.box_from_cube(self.cube_color)
-                    print(f"Buscando caixa: {self.target_box_label}")
                     self.state = "SEARCH_BOX"
 
-            # ================= SEARCH BOX =================
             elif self.state == "SEARCH_BOX":
                 self.on_state_enter("SEARCH_BOX")
                 alvo = self.find_objects(detections, [self.target_box_label])
-
                 if alvo:
-                    print(f"-> Caixa encontrada: {alvo['label']}")
+                    self.box_patience = 50
                     self.state = "APPROACH_BOX"
                 else:
                     self.base.move(0, 0, -self.turn_speed)
 
-            # ================= APPROACH BOX (CORRIGIDO) =================
             elif self.state == "APPROACH_BOX":
                 self.on_state_enter("APPROACH_BOX")
                 alvo = self.find_objects(detections, [self.target_box_label])
 
-                if not alvo:
-                    print("Perdi a caixa!")
-                    self.state = "SEARCH_BOX"
-                    continue
-
-                # 1. Checa timer de Strafe
-                if self.strafe_timer > 0:
-                    self.strafe_timer -= 1
-                    self.base.move(0.0, self.last_strafe_vy, 0.0)
-                    continue 
-
-                # 2. Leitura de Sensores
-                val_esq = self.ds_left.getValue()
-                val_dir = self.ds_right.getValue()
-                
-                final_vx = 0.0
-                final_vy = 0.0
-                final_w = 0.0
-
-                # 3. Lógica de Obstrução (Correção: Removido o "-10" que causava erro)
-                if val_esq-0.20 < self.limiar_desvio:
-                    print(f"[OBSTRUÇÃO] Esquerda ({val_esq:.2f}m) -> Strafe Direita")
-                    self.last_strafe_vy = self.velocidade_strafe
-                    #self.strafe_timer = self.steps_para_2s
-                    self.base.move(0.0, self.last_strafe_vy, 0.0)
-                    continue # Já aplica e pula o resto
-
-                elif val_dir-0.20 < self.limiar_desvio:
-                    print(f"[OBSTRUÇÃO] Direita ({val_dir:.2f}m) -> Strafe Esquerda")
-                    self.last_strafe_vy = -self.velocidade_strafe
-                    #self.strafe_timer = self.steps_para_2s
-                    self.base.move(0.0, self.last_strafe_vy, 0.0)
-                    continue
-
+                if alvo:
+                    self.box_patience = 50
+                    self.last_error_px = center_cam - alvo["center"][0]
                 else:
-                    # 4. Caminho Livre
-                    erro_px = center_cam - alvo["center"][0]
-                    fuzzy_dist = dist if dist < 3.0 else 1.0
-                    v_norm, w_norm = self.fuzzy.compute(erro_px, fuzzy_dist)
-                    
-                    final_vx = v_norm * self.VEL_MAX
-                    final_vy = 0.0
-                    final_w = w_norm * self.ROT_MAX
-
-                # Aplica movimento de aproximação
-                self.base.move(final_vx, final_vy, final_w)
-
-                # 5. Condição de Parada + CHECAGEM DOS SENSORES LATERAIS
-                if dist <= self.distancia_parar_caixa and final_vx > 0:
-                    
-                    # --- AQUI ESTÁ A LÓGICA PEDIDA ---
-                    # Só dropa se ambos detectarem algo >= 0.60m (espaço livre ou alinhado)
-                    if val_esq <= 0.20 and val_dir <= 0.20:
-                        print(f"Cheguei e alinhei! (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
+                    self.box_patience -= 1
+                    if self.box_patience <= 0:
+                        self.state = "SEARCH_BOX"
                         self.base.reset()
-                        self.drop_timer = 0
-                        self.state = "DROP_CUBE"
-                    else:
-                        print(f"Na frente da caixa, mas sensores < 60cm. Ajustando... (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
-                        # O robô continuará no loop APPROACH_BOX, permitindo que o Fuzzy ou o Strafe corrijam a posição
+                        continue
 
-            # ================= DROP CUBE =================
+                if not self.avoiding and dist_caixa < 0.18 and abs(self.last_error_px) > 25:
+                    self.avoiding = True
+
+                if self.avoiding:
+                    slide_speed = max(
+                        min(self.last_error_px / 80.0, 0.6), -0.6)
+                    self.base.move(0.10, slide_speed, 0.0)
+                    if abs(self.last_error_px) < 12 or dist_caixa > 0.25:
+                        self.avoiding = False
+                    continue
+
+                v_norm, w_norm = self.fuzzy.compute(
+                    self.last_error_px, min(dist_caixa, 3.0))
+                self.base.move(v_norm * self.VEL_MAX,
+                               0.0, w_norm * self.ROT_MAX)
+
+                if dist_caixa <= self.distancia_parar_caixa and abs(self.last_error_px) < 15:
+                    self.base.reset()
+                    self.drop_timer = 0
+                    self.state = "DROP_CUBE"
+
             elif self.state == "DROP_CUBE":
                 self.on_state_enter("DROP_CUBE")
-                self.base.reset()
                 self.drop_timer += 1
 
-                if self.drop_timer == 20:
+                # 1. Subir braço para posição segura
+                if self.drop_timer == 1:
+                    print("Subindo braço para posição segura...")
+                    self.base.reset()
                     self.arm.set_height(Arm.FRONT_PLATE)
-                elif self.drop_timer == 60:
+
+                # 2. Avança um pouco para dentro da caixa
+                elif 1 < self.drop_timer < 25:
+                    self.base.move(0.05, 0, 0)
+
+                # 3. Leva braço para frente sobre a caixa
+                elif self.drop_timer == 25:
+                    print("Posicionando braço sobre a caixa...")
+                    self.base.reset()
+                    self.arm.set_orientation(Arm.FRONT)
+
+                # 4. Abaixa braço dentro da caixa
+                elif self.drop_timer == 55:
+                    print("Abaixando braço dentro da caixa...")
+                    self.arm.set_height(Arm.FRONT_FLOOR)
+
+                # 5. Solta o cubo
+                elif self.drop_timer == 95:
+                    print("Soltando cubo dentro da caixa...")
                     self.gripper.release()
-                elif self.drop_timer > 100:
+
+                # 6. Sobe o braço
+                elif self.drop_timer == 135:
+                    print("Subindo braço...")
+                    self.arm.set_height(Arm.FRONT_PLATE)
+
+                # 7. Recolhe braço
+                elif self.drop_timer == 175:
+                    print("Recolhendo braço...")
+                    self.arm.reset()
+
+                # 8. Finaliza
+                elif self.drop_timer > 215:
                     self.collected_cubes += 1
                     print(f"Cubo entregue! Total: {self.collected_cubes}")
                     self.state = "BACKUP"
                     self.backup_timer = 0
 
-            # ================= BACKUP =================
             elif self.state == "BACKUP":
                 self.backup_timer += 1
                 self.base.move(-0.3, 0, 0)
