@@ -18,7 +18,7 @@ Description: Python wrapper for YouBot gripper control
 
 # Gripper positions
 MIN_POS = 0.003
-MAX_POS = 0.035
+MAX_POS = 0.025
 OFFSET_WHEN_LOCKED = 0.021
 
 def bound(value, min_val, max_val):

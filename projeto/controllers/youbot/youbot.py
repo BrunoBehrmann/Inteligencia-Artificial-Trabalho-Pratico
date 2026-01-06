@@ -39,7 +39,7 @@ class YouBotController:
 
         # Configurações de Strafe
         self.limiar_desvio = 0.60
-        self.velocidade_strafe = 0.5  # Aumentei para 0.5 (0.01 é muito lento)
+        self.velocidade_strafe = 0.5
         
         # Variáveis de Controle do Strafe (Timer)
         self.strafe_timer = 0
@@ -227,7 +227,7 @@ class YouBotController:
                     
                     # --- AQUI ESTÁ A LÓGICA PEDIDA ---
                     # Só dropa se ambos detectarem algo >= 0.60m (espaço livre ou alinhado)
-                    if val_esq >= 0.60 and val_dir >= 0.60:
+                    if val_esq <= 0.20 and val_dir <= 0.20:
                         print(f"Cheguei e alinhei! (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
                         self.base.reset()
                         self.drop_timer = 0
