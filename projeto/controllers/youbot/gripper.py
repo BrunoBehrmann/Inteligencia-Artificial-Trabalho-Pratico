@@ -16,69 +16,57 @@ limitations under the License.
 Description: Python wrapper for YouBot gripper control
 """
 
-# Gripper positions
+
 MIN_POS = 0.003
 MAX_POS = 0.025
 OFFSET_WHEN_LOCKED = 0.021
 
+
 def bound(value, min_val, max_val):
-    """Clamp value between min and max"""
+
     return max(min_val, min(max_val, value))
 
+
 class Gripper:
-    """Controls the YouBot parallel gripper"""
-    
+
     def __init__(self, robot):
-        """Initialize gripper motors
-        
-        Args:
-            robot: Webots Robot instance
-        """
+
         self.robot = robot
         self.time_step = int(robot.getBasicTimeStep())
-        
+
         # Get gripper finger motor (single motor controls both fingers)
         self.finger = robot.getDevice("finger::left")
-        
+
         # Set velocity for position control
         if self.finger:
             self.finger.setVelocity(0.02)
         else:
             print("Warning: Could not find gripper motor 'finger::left'")
-        
+
         # Current state
         self.is_gripping = False
-    
+
     def grip(self):
-        """Close gripper to grip an object"""
+
         if self.finger:
             self.finger.setPosition(MIN_POS)
         self.is_gripping = True
-    
+
     def release(self):
-        """Open gripper to release an object"""
+
         if self.finger:
             self.finger.setPosition(MAX_POS)
         self.is_gripping = False
-    
+
     def set_gap(self, gap):
-        """Set gripper to a specific gap width between fingers
-        
-        Args:
-            gap: desired gap between fingers in meters
-        """
-        # Calculate motor position with offset compensation
+
         v = bound(0.5 * (gap - OFFSET_WHEN_LOCKED), MIN_POS, MAX_POS)
-        
+
         if self.finger:
             self.finger.setPosition(v)
-        
+
         self.is_gripping = (v < MAX_POS / 2)
-    
+
     def is_closed(self):
-        """Check if gripper is in closed/gripping state
-        
-        Returns:
-            bool: True if gripper is gripping
-        """
+
         return self.is_gripping
