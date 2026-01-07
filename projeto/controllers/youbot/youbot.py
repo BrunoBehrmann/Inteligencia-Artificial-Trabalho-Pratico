@@ -61,7 +61,7 @@ class YouBotController:
 
         self.turn_speed = 0.5
         self.distancia_parar_cubo = 0.11
-        self.distancia_parar_caixa = 0.40 
+        self.distancia_parar_caixa = 0.20 
 
         self.VEL_MAX = 0.5
         self.ROT_MAX = 1.0
@@ -237,19 +237,11 @@ class YouBotController:
                 self.base.move(final_vx, final_vy, final_w)
 
                 # 5. Condição de Parada
-                if dist <= self.distancia_parar_caixa and final_vx > 0:
-                    
-                    # Agora que estamos ignorando o Strafe, usamos os sensores 
-                    # apenas para confirmar que entramos na caixa (alinhamento)
-                    if val_esq <= 0.20 and val_dir <= 0.20:
-                        print(f"Cheguei e alinhei! (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
-                        self.base.reset()
-                        self.drop_timer = 0
-                        self.state = "DROP_CUBE"
-                    else:
-                        print(f"Ajustando na boca da caixa... (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
-                        # O robô continua andando para frente (controlado pelo Fuzzy) 
-                        # para entrar mais na caixa, já que o Strafe está desligado.
+                if dist <= self.distancia_parar_caixa:    
+                    print(f"Cheguei e alinhei! (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
+                    self.base.reset()
+                    self.drop_timer = 0
+                    self.state = "DROP_CUBE"
 
             # ================= DROP CUBE =================
             elif self.state == "DROP_CUBE":
