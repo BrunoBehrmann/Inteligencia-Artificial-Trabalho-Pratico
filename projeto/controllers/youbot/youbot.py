@@ -237,7 +237,7 @@ class YouBotController:
                 self.base.move(final_vx, final_vy, final_w)
 
                 # 5. Condição de Parada
-                if dist <= self.distancia_parar_caixa:    
+                if dist <= self.distancia_parar_caixa and final_vy != 0.0:    
                     print(f"Cheguei e alinhei! (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
                     self.base.reset()
                     self.drop_timer = 0
