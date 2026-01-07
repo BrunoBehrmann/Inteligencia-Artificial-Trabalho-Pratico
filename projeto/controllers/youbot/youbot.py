@@ -5,11 +5,9 @@ from gripper import Gripper
 from perception import Perception
 from fuzzy_control import FuzzyControl
 
-
 class YouBotController:
     def __init__(self):
         self.robot = Robot()
-        # --- CORREÇÃO: Definir time_step antes de usar ---
         self.time_step = int(self.robot.getBasicTimeStep())
         
         # Cálculo correto dos steps para 2 segundos
@@ -45,6 +43,10 @@ class YouBotController:
         self.strafe_timer = 0
         self.last_strafe_vy = 0.0
 
+        # --- ALTERAÇÃO 1: Flag de Controle dos Sensores ---
+        # Inicia como False (Sensores ATIVOS por padrão)
+        self.ignore_side_sensors = False 
+
         self.fuzzy = FuzzyControl()
 
         self.state = "SEARCH_CUBE"
@@ -58,10 +60,8 @@ class YouBotController:
         self.max_cubes = 15
 
         self.turn_speed = 0.5
-
-        # Distâncias de parada
         self.distancia_parar_cubo = 0.11
-        self.distancia_parar_caixa = 0.20 
+        self.distancia_parar_caixa = 0.40 
 
         self.VEL_MAX = 0.5
         self.ROT_MAX = 1.0
@@ -170,7 +170,7 @@ class YouBotController:
                 else:
                     self.base.move(0, 0, -self.turn_speed)
 
-            # ================= APPROACH BOX (CORRIGIDO) =================
+            # ================= APPROACH BOX (MODIFICADO) =================
             elif self.state == "APPROACH_BOX":
                 self.on_state_enter("APPROACH_BOX")
                 alvo = self.find_objects(detections, [self.target_box_label])
@@ -178,7 +178,20 @@ class YouBotController:
                 if not alvo:
                     print("Perdi a caixa!")
                     self.state = "SEARCH_BOX"
+                    # Resetamos a flag se perdermos a caixa, por segurança
+                    self.ignore_side_sensors = False 
                     continue
+
+                # --- ALTERAÇÃO 2: Verificação de Exclusividade ---
+                # Verifica se existe qualquer objeto detectado que NÃO seja a caixa alvo
+                objetos_intrusos = [d for d in detections if d['label'] != self.target_box_label]
+
+                # Se a lista de intrusos for vazia, significa que SÓ estamos vendo a caixa alvo.
+                # Se isso acontecer, ativamos a flag para ignorar sensores laterais.
+                if len(objetos_intrusos) == 0:
+                    if not self.ignore_side_sensors:
+                        print(">>> Visão Limpa (Só Caixa)! Desativando sensores laterais.")
+                        self.ignore_side_sensors = True
 
                 # 1. Checa timer de Strafe
                 if self.strafe_timer > 0:
@@ -194,47 +207,49 @@ class YouBotController:
                 final_vy = 0.0
                 final_w = 0.0
 
-                # 3. Lógica de Obstrução (Correção: Removido o "-10" que causava erro)
-                if val_esq-0.20 < self.limiar_desvio:
-                    print(f"[OBSTRUÇÃO] Esquerda ({val_esq:.2f}m) -> Strafe Direita")
-                    self.last_strafe_vy = self.velocidade_strafe
-                    #self.strafe_timer = self.steps_para_2s
-                    self.base.move(0.0, self.last_strafe_vy, 0.0)
-                    continue # Já aplica e pula o resto
+                # 3. Lógica de Obstrução (COM FILTRO DA FLAG)
+                # O robô só vai desviar se a flag 'ignore_side_sensors' for False.
+                if not self.ignore_side_sensors:
+                    if val_esq - 0.20 < self.limiar_desvio:
+                        print(f"[OBSTRUÇÃO] Esquerda ({val_esq:.2f}m) -> Strafe Direita")
+                        self.last_strafe_vy = self.velocidade_strafe
+                        # self.strafe_timer = self.steps_para_2s
+                        self.base.move(0.0, self.last_strafe_vy, 0.0)
+                        continue 
 
-                elif val_dir-0.20 < self.limiar_desvio:
-                    print(f"[OBSTRUÇÃO] Direita ({val_dir:.2f}m) -> Strafe Esquerda")
-                    self.last_strafe_vy = -self.velocidade_strafe
-                    #self.strafe_timer = self.steps_para_2s
-                    self.base.move(0.0, self.last_strafe_vy, 0.0)
-                    continue
-
-                else:
-                    # 4. Caminho Livre
-                    erro_px = center_cam - alvo["center"][0]
-                    fuzzy_dist = dist if dist < 3.0 else 1.0
-                    v_norm, w_norm = self.fuzzy.compute(erro_px, fuzzy_dist)
-                    
-                    final_vx = v_norm * self.VEL_MAX
-                    final_vy = 0.0
-                    final_w = w_norm * self.ROT_MAX
+                    elif val_dir - 0.20 < self.limiar_desvio:
+                        print(f"[OBSTRUÇÃO] Direita ({val_dir:.2f}m) -> Strafe Esquerda")
+                        self.last_strafe_vy = -self.velocidade_strafe
+                        # self.strafe_timer = self.steps_para_2s
+                        self.base.move(0.0, self.last_strafe_vy, 0.0)
+                        continue
+                
+                # 4. Caminho Livre (Fuzzy assume o controle)
+                erro_px = center_cam - alvo["center"][0]
+                fuzzy_dist = dist if dist < 3.0 else 1.0
+                v_norm, w_norm = self.fuzzy.compute(erro_px, fuzzy_dist)
+                
+                final_vx = v_norm * self.VEL_MAX
+                final_vy = 0.0
+                final_w = w_norm * self.ROT_MAX
 
                 # Aplica movimento de aproximação
                 self.base.move(final_vx, final_vy, final_w)
 
-                # 5. Condição de Parada + CHECAGEM DOS SENSORES LATERAIS
+                # 5. Condição de Parada
                 if dist <= self.distancia_parar_caixa and final_vx > 0:
                     
-                    # --- AQUI ESTÁ A LÓGICA PEDIDA ---
-                    # Só dropa se ambos detectarem algo >= 0.60m (espaço livre ou alinhado)
+                    # Agora que estamos ignorando o Strafe, usamos os sensores 
+                    # apenas para confirmar que entramos na caixa (alinhamento)
                     if val_esq <= 0.20 and val_dir <= 0.20:
                         print(f"Cheguei e alinhei! (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
                         self.base.reset()
                         self.drop_timer = 0
                         self.state = "DROP_CUBE"
                     else:
-                        print(f"Na frente da caixa, mas sensores < 60cm. Ajustando... (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
-                        # O robô continuará no loop APPROACH_BOX, permitindo que o Fuzzy ou o Strafe corrijam a posição
+                        print(f"Ajustando na boca da caixa... (Esq:{val_esq:.2f} Dir:{val_dir:.2f})")
+                        # O robô continua andando para frente (controlado pelo Fuzzy) 
+                        # para entrar mais na caixa, já que o Strafe está desligado.
 
             # ================= DROP CUBE =================
             elif self.state == "DROP_CUBE":
@@ -256,6 +271,14 @@ class YouBotController:
             elif self.state == "BACKUP":
                 self.backup_timer += 1
                 self.base.move(-0.3, 0, 0)
+                
+                # --- ALTERAÇÃO 3: Reativar Sensores ---
+                # Só reativamos os sensores quando o robô começa a sair da caixa
+                # para garantir que o ciclo recomece seguro.
+                if self.ignore_side_sensors:
+                    self.ignore_side_sensors = False
+                    print(">>> Sensores laterais REATIVADOS para o próximo ciclo.")
+
                 if self.backup_timer > 30:
                     self.state = "SEARCH_CUBE"
 
